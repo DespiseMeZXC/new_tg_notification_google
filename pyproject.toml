@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "calendar-bot"
+version = "0.1.0"
+description = "Телеграм бот для работы с календарем"
+authors = ["Ваше Имя <your.email@example.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+aiogram = "^3.18.0"
+sqlalchemy = "^1.4"
+google-auth-oauthlib = "^1.2.1"
+google-api-python-client = "^2.162.0"
+python-dotenv = "^1.0.1"
+aiohttp = "^3.11.13"
+pydantic = "^2.10.6"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.1.0"
+mypy = "^1.8.0"
+sqlalchemy-stubs = "^0.4"
+types-sqlalchemy = "^1.4.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+
+[tool.mypy]
+strict = true

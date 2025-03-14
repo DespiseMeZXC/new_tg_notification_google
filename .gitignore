@@ -1,0 +1,10 @@
+.venv
+.env
+credentials.json
+processed_events.json
+token.json
+__pycache__
+started_events.json
+token_*.json
+*.db
+*.sqlite
