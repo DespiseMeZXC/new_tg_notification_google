@@ -199,7 +199,7 @@ async def check_week_meetings(message: Message) -> None:
     if not db.tokens.get_token(user_id):
         await message.answer(
             "Вы не авторизованы в Google Calendar.\n"
-            "Используйте команду /serverauth для авторизации."
+            "Используйте команду /auth для авторизации."
         )
         return
 
