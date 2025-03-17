@@ -2,6 +2,8 @@ import os
 import asyncio
 import logging
 import json
+import signal
+import sys
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher
@@ -25,13 +27,25 @@ load_dotenv()
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Инициализация бота и диспетчера
 db = DatabaseQueries(str(BASE_DIR / "db.sqlite"))
 bot = Bot(token=str(os.getenv("BOT_TOKEN")))
 dp = Dispatcher()
 
+# Добавляем обработчик сигналов для корректного завершения
+async def on_shutdown(signal_type):
+    """Корректное завершение работы бота при получении сигнала"""
+    logging.info(f"Получен сигнал {signal_type.name}, завершаю работу...")
+    
+    # Закрываем соединения с базой данных
+    db.db.close_all_sessions()
+    
+    # Закрываем сессию бота
+    await bot.session.close()
+    
+    sys.exit(0)
 
 # Команда /start
 @dp.message(Command("start"))
@@ -301,12 +315,43 @@ def safe_parse_datetime(date_str: str) -> datetime:
 
 # Запуск бота
 async def main() -> None:
-    # Запускаем фоновую задачу для проверки встреч
-    # asyncio.create_task(scheduled_meetings_check())
-
+    # Регистрируем обработчики сигналов
+    for signal_type in (signal.SIGINT, signal.SIGTERM):
+        asyncio.get_event_loop().add_signal_handler(
+            signal_type, lambda s=signal_type: asyncio.create_task(on_shutdown(s))
+        )
+    
     # Запускаем бота
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Проверяем, не запущен ли уже бот
+    try:
+        # Создаем файл блокировки
+        lock_file = BASE_DIR / ".bot.lock"
+        
+        if lock_file.exists():
+            # Проверяем, активен ли процесс
+            with open(lock_file, "r") as f:
+                pid = int(f.read().strip())
+            
+            try:
+                # Проверяем, существует ли процесс с таким PID
+                os.kill(pid, 0)
+                logging.error(f"Бот уже запущен (PID: {pid}). Завершаю работу.")
+                sys.exit(1)
+            except OSError:
+                # Процесс не существует, можно продолжить
+                logging.warning(f"Найден устаревший файл блокировки. Перезаписываю.")
+        
+        # Записываем текущий PID в файл блокировки
+        with open(lock_file, "w") as f:
+            f.write(str(os.getpid()))
+        
+        # Запускаем бота
+        asyncio.run(main())
+    finally:
+        # Удаляем файл блокировки при завершении
+        if lock_file.exists():
+            lock_file.unlink()

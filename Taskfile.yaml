@@ -26,3 +26,11 @@ tasks:
     desc: Просмотр запущенных контейнеров
     cmds:
       - docker compose ps
+
+  clear:
+    desc: Очистка контейнеров
+    cmds:
+      - docker compose down
+      - docker system prune -f
+      - docker rmi new_tg_notification-calendar-bot
+      - docker system prune -f
