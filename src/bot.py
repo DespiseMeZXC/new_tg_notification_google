@@ -3,7 +3,6 @@ import asyncio
 import logging
 import signal
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
