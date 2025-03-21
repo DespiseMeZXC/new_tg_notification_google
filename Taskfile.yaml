@@ -1,6 +1,11 @@
 version: '3'
 
 tasks:
+  run:
+    desc: Запуск бота
+    cmds:
+      - uv run src/bot.py
+
   restart:
     desc: Перезапуск контейнеров
     cmds:
