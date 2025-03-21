@@ -42,6 +42,7 @@ class UserQueries(Queries):
             session.add(user)
             session.commit()
             # Возвращаем объект, привязанный к сессии
+            logger.info(f"Успешно добавлен пользователь: {user}")
             return session.merge(user)
         except Exception as e:
             session.rollback()
@@ -55,6 +56,7 @@ class UserQueries(Queries):
         session = self.db.get_session()
         try:
             user = session.query(User).filter(User.id == user_id).first()
+            logger.error(f"Успешно получен пользователь: {user}")
             return user
         except Exception as e:
             logger.error(f"Ошибка при получении пользователя: {e}")
@@ -97,7 +99,9 @@ class TokenQueries(Queries):
         try:
             token = session.query(Token).filter(Token.user_id == user_id).first()
             if token:
+                logger.info(f"Успешно получен токен: {token}")
                 return json.loads(token.token_data)
+            logger.info(f"Токен не найден для пользователя: {user_id}")
             return None
         except Exception as e:
             logger.error(f"Ошибка при получении токена: {e}")
@@ -111,7 +115,9 @@ class TokenQueries(Queries):
         try:
             token = session.query(Token).filter(Token.user_id == user_id).first()
             if token:
+                logger.info(f"Успешно получен токен: {token}")
                 return json.loads(token.token_data), token.redirect_url
+            logger.info(f"Токен не найден для пользователя: {user_id}")
             return None, None
         except Exception as e:
             logger.error(f"Ошибка при получении состояния авторизации: {e}")
@@ -126,6 +132,7 @@ class TokenQueries(Queries):
             token = session.query(Token).filter(Token.user_id == user_id).first()
             session.delete(token)
             session.commit()
+            logger.info(f"Токен удален для пользователя: {user_id}")
             return True
         except Exception as e:
             session.rollback()
@@ -185,6 +192,7 @@ class TokenQueries(Queries):
         session = self.db.get_session()
         try:
             token = session.query(Token).filter(Token.user_id == user_id).first()
+            logger.info(f"Успешно получен токен: {token}")
             return token.auth_message_id if token else None
         except Exception as e:
             logger.error(f"Ошибка при получении ID сообщения авторизации: {e}")
@@ -245,6 +253,7 @@ class EventQueries(Queries):
                 query = query.filter(Event.start_time <= end_time)
 
             events = query.order_by(Event.start_time).all()
+            logger.info(f"Успешно получены события: {events}")
             return events
         except Exception as e:
             logger.error(f"Ошибка при получении событий: {e}")
@@ -262,6 +271,7 @@ class NotificationQueries(Queries):
             notification = Notification(event_id=event_id, user_id=user_id)
             session.add(notification)
             session.commit()
+            logger.info(f"Уведомление создано: {notification}")
             return notification
         except Exception as e:
             session.rollback()
@@ -279,7 +289,9 @@ class NotificationQueries(Queries):
                 notification.is_sent = True
                 notification.sent_at = datetime.utcnow()
                 session.commit()
+                logger.info(f"Уведомление отправлено: {notification}")
                 return True
+            logger.info(f"Уведомление не найдено: {notification_id}")
             return False
         except Exception as e:
             session.rollback()
@@ -295,6 +307,7 @@ class NotificationQueries(Queries):
             notifications = (
                 session.query(Notification).filter(Notification.is_sent == False).all()
             )
+            logger.info(f"Успешно получены неотправленные уведомления: {notifications}")
             return notifications
         except Exception as e:
             logger.error(f"Ошибка при получении уведомлений: {e}")

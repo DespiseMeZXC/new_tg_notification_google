@@ -15,14 +15,10 @@ from queries import DatabaseQueries
 # Загрузка переменных окружения
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 # Если изменить эти области, удалите файл token.json
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-
-# Директория для хранения токенов
-TOKEN_DIR = os.getenv("TOKEN_DIR", ".")
-
-# Убедимся, что директория существует
-os.makedirs(TOKEN_DIR, exist_ok=True)
 
 
 async def get_credentials(user_id: int, db: DatabaseQueries) -> Any:
@@ -44,8 +40,9 @@ async def get_credentials(user_id: int, db: DatabaseQueries) -> Any:
             if user_id and db:
                 db.tokens.save_token(user_id, json.loads(creds.to_json()))
         else:
+            logger.info(f"Учетные данные не найдены для пользователя: {user_id}")
             return None
-
+    logger.info(f"Учетные данные найдены для пользователя: {user_id}")
     return creds
 
 
@@ -80,7 +77,7 @@ def create_auth_url(user_id: int, db: DatabaseQueries) -> Any:
         }
 
         db.tokens.save_auth_state(user_id, flow_state, flow.redirect_uri)
-
+        logger.info(f"URL авторизации создан для пользователя: {user_id}")
         return auth_url
     except Exception as e:
         logging.error(f"Ошибка при создании URL авторизации: {e}")
@@ -93,6 +90,7 @@ async def process_auth_code(user_id: int, code: str, db: DatabaseQueries, user_d
         # Получаем сохраненное состояние
         flow_state, redirect_uri = db.tokens.get_auth_state(user_id)
         if not flow_state:
+            logger.info(f"Сессия авторизации истекла для пользователя: {user_id}")
             return (
                 False,
                 "Сессия авторизации истекла. Пожалуйста, начните заново с команды /serverauth",
@@ -118,9 +116,9 @@ async def process_auth_code(user_id: int, code: str, db: DatabaseQueries, user_d
         creds = flow.credentials
 
         # Сохраняем учетные данные
-        user = db.users.add_user(user_data)
+        db.users.add_user(user_data)
         db.tokens.save_token(user_id, json.loads(creds.to_json()))
-
+        logger.info(f"Учетные данные сохранены для пользователя: {user_id}")
         return (
             True,
             "✅ Авторизация успешно завершена! Теперь вы можете использовать команды бота.",
@@ -145,6 +143,7 @@ async def get_upcoming_events(
 
     # Если нет учетных данных, возвращаем пустой список
     if not creds:
+        logger.info(f"Учетные данные не найдены для пользователя: {user_id}")
         return []
 
     # Создаем сервис
@@ -171,7 +170,7 @@ async def get_upcoming_events(
     time_min_str = time_min.strftime("%Y-%m-%dT%H:%M:%SZ")
     time_max_str = time_max.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    logging.info(f"Запрашиваем события с {time_min_str} по {time_max_str}")
+    logger.info(f"Запрашиваем события с {time_min_str} по {time_max_str}")
 
     try:
         # Вызываем API
@@ -193,22 +192,8 @@ async def get_upcoming_events(
         # Фильтруем только события с видеовстречами
         events = [event for event in events if "hangoutLink" in event]
 
-        logging.info(f"Получено {len(events)} событий из календаря")
+        logger.info(f"Получено {len(events)} событий из календаря")
         return events
     except Exception as e:
-        logging.error(f"Ошибка при получении событий: {e}")
+        logger.error(f"Ошибка при получении событий: {e}")
         return []
-
-
-async def get_credentials_with_local_server() -> Any:
-    """Получение учетных данных с использованием локального сервера."""
-    try:
-        flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-        creds = flow.run_local_server(port=0)
-        logging.info("Успешно получены учетные данные через локальный сервер")
-        return creds
-    except Exception as e:
-        logging.error(
-            f"Ошибка при получении учетных данных через локальный сервер: {e}"
-        )
-        return None

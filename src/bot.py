@@ -16,7 +16,6 @@ from google_calendar import (
     get_upcoming_events,
     create_auth_url,
     process_auth_code,
-    get_credentials_with_local_server,
 )
 from queries import DatabaseQueries
 
@@ -104,29 +103,12 @@ async def server_auth_command(message: Message) -> None:
             input_field_placeholder="Вставьте код авторизации"
         )
         )
-    logging.info(f"for set auth_message_id: {auth_message.message_id}")
-    logging.info(f"for set auth_message_id: {message.from_user.id}")
     db.tokens.set_auth_message_id(message.from_user.id, str(auth_message.message_id))
     
     # Добавляем обработчик для получения кода авторизации
     @dp.message()
     async def handle_auth_code(code_message: Message) -> None:
         auth_message_id = db.tokens.get_auth_message_id(code_message.from_user.id)
-        logging.info(f"for get auth_message_id: {auth_message_id}")
-        # Проверяем, что сообщение является ответом на наше сообщение с инструкцией
-        logging.info("handle_auth_code")
-        logging.info(f"code_message:\n {code_message.message_id}")
-        logging.info(f"auth_message_id:\n {auth_message_id}")
-        
-        logging.info(f"code_message.reply_to_message: {code_message.reply_to_message.message_id}")
-        logging.info(f"code_message.reply_to_message.message_id: {code_message.reply_to_message.message_id}")
-        logging.info(f"auth_message_id: {auth_message_id}")
-        logging.info(f"code_message.from_user: {code_message.from_user}")
-        logging.info(f"code_message.from_user.id: {code_message.from_user.id}")
-        
-        # Проверяем, что все условия совпадают
-        logging.info(f"Сравнение ID сообщений: {code_message.reply_to_message.message_id} == {auth_message_id}")
-        logging.info(f"Сравнение ID пользователей: {code_message.from_user.id} == {code_message.from_user.id}")
         
         if (not code_message.reply_to_message or 
             code_message.reply_to_message.message_id != int(auth_message_id) or  # Преобразуем в int
@@ -136,8 +118,6 @@ async def server_auth_command(message: Message) -> None:
             return
 
         code = code_message.text.strip()
-        logging.info(f"Получен код авторизации: {code}")
-        # Проверяем, что код не пустой
         if not code:
             await code_message.answer("❌ Пожалуйста, отправьте корректный код авторизации")
             return
@@ -168,7 +148,6 @@ async def server_auth_command(message: Message) -> None:
                 )
                 
         except Exception as e:
-            logging.error(f"Ошибка при обработке кода: {e}")
             await processing_msg.edit_text(
                 "❌ Произошла ошибка при обработке кода.\n"
                 "Попробуйте еще раз или используйте /manualtoken"
@@ -232,51 +211,6 @@ async def set_token_command(message: Message) -> None:
     except Exception as e:
         logging.error(f"Ошибка при установке токена вручную: {e}")
         await message.answer(f"❌ Произошла ошибка: {str(e)}")
-
-
-# Команда /code для обработки кода авторизации
-@dp.message(Command("code"))
-async def process_auth_code_command(message: Message) -> None:
-    if not message.from_user:
-        logging.error("Не удалось получить пользователя из сообщения")
-        return
-    print(message.from_user)
-    user_id = message.from_user.id
-    user_data = {
-        "id": message.from_user.id,
-        "username": message.from_user.username,
-        "full_name": f"{message.from_user.last_name} {message.from_user.first_name}",
-        "is_bot": message.from_user.is_bot,
-        "language_code": message.from_user.language_code,
-    }
-        
-
-    # Проверяем наличие кода
-    if message.text is not None:
-        parts = message.text.split(maxsplit=1)
-        if len(parts) < 2:
-            await message.answer("❌ Пожалуйста, укажите код после команды /code")
-            return
-
-        # Получаем код
-        code = message.text.split(maxsplit=1)[1].strip()
-    else:
-        # Обработка случая, когда строка равна None
-        await message.answer("❌ Пожалуйста, укажите код после команды /code")
-        return
-
-    # Отправляем сообщение о начале обработки
-    processing_msg = await message.answer("🔄 Обрабатываю код авторизации...")
-
-    try:
-        # Обрабатываем код авторизации
-        success, result = await process_auth_code(user_id, code, db, user_data)
-
-        # Обновляем сообщение с результатом
-        await processing_msg.edit_text(result)
-    except Exception as e:
-        logging.error(f"Ошибка при обработке кода авторизации: {e}")
-        await processing_msg.edit_text(f"❌ Произошла ошибка: {str(e)}")
 
 
 # Команда /week для просмотра встреч на неделю
