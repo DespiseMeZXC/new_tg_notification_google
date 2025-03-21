@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, ForceReply
 from aiogram.utils.markdown import hbold
 from dotenv import load_dotenv
 from pathlib import Path
@@ -77,22 +77,102 @@ async def server_auth_command(message: Message) -> None:
         logging.error("Не удалось получить пользователя из сообщения")
         return
 
-    user_id = message.from_user.id
-
     # Создаем URL для авторизации с правильными параметрами
-    auth_url = create_auth_url(user_id, db)
+    db.tokens.delete_token_by_user_id(message.from_user.id)
+    auth_url = create_auth_url(message.from_user.id, db)
 
-    await message.answer(
+    if isinstance(auth_url, str) and auth_url.startswith("Ошибка"):
+        await message.answer(
+            f"❌ {auth_url}\n"
+            "Пожалуйста, сообщите об этой ошибке администратору."
+        )
+        return
+    # Отправляем сообщение с инструкцией и сохраняем его ID
+    auth_message = await message.answer(
         "📱 <b>Инструкция по авторизации на сервере:</b>\n\n"
         "1️⃣ Перейдите по ссылке ниже в браузере:\n"
         f"{auth_url}\n\n"
         "2️⃣ Войдите в аккаунт Google и разрешите доступ к календарю\n\n"
-        "3️⃣ Вы получите код авторизации. Скопируйте его\n\n"
-        "4️⃣ Отправьте боту команду:\n"
-        "/code ПОЛУЧЕННЫЙ_КОД\n\n"
-        "❗ Если возникает ошибка при авторизации, попробуйте использовать команду /manualtoken",
+        "3️⃣ Вы получите код авторизации. Скопируйте его и отправьте в ответ на это сообщение\n\n"
+        "❗ Если возникает ошибка при авторизации:\n"
+        "- Убедитесь, что вы используете личный аккаунт Google (не корпоративный)\n" 
+        "- Попробуйте открыть ссылку в режиме инкогнито\n"
+        "- Или используйте команду /manualtoken",
         parse_mode="HTML",
-    )
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="Вставьте код авторизации"
+        )
+        )
+    logging.info(f"for set auth_message_id: {auth_message.message_id}")
+    logging.info(f"for set auth_message_id: {message.from_user.id}")
+    db.tokens.set_auth_message_id(message.from_user.id, str(auth_message.message_id))
+    
+    # Добавляем обработчик для получения кода авторизации
+    @dp.message()
+    async def handle_auth_code(code_message: Message) -> None:
+        auth_message_id = db.tokens.get_auth_message_id(code_message.from_user.id)
+        logging.info(f"for get auth_message_id: {auth_message_id}")
+        # Проверяем, что сообщение является ответом на наше сообщение с инструкцией
+        logging.info("handle_auth_code")
+        logging.info(f"code_message:\n {code_message.message_id}")
+        logging.info(f"auth_message_id:\n {auth_message_id}")
+        
+        logging.info(f"code_message.reply_to_message: {code_message.reply_to_message.message_id}")
+        logging.info(f"code_message.reply_to_message.message_id: {code_message.reply_to_message.message_id}")
+        logging.info(f"auth_message_id: {auth_message_id}")
+        logging.info(f"code_message.from_user: {code_message.from_user}")
+        logging.info(f"code_message.from_user.id: {code_message.from_user.id}")
+        
+        # Проверяем, что все условия совпадают
+        logging.info(f"Сравнение ID сообщений: {code_message.reply_to_message.message_id} == {auth_message_id}")
+        logging.info(f"Сравнение ID пользователей: {code_message.from_user.id} == {code_message.from_user.id}")
+        
+        if (not code_message.reply_to_message or 
+            code_message.reply_to_message.message_id != int(auth_message_id) or  # Преобразуем в int
+            not code_message.from_user or 
+            code_message.from_user.id != code_message.from_user.id):
+            logging.info("Условия не совпадают, пропускаем обработку")
+            return
+
+        code = code_message.text.strip()
+        logging.info(f"Получен код авторизации: {code}")
+        # Проверяем, что код не пустой
+        if not code:
+            await code_message.answer("❌ Пожалуйста, отправьте корректный код авторизации")
+            return
+
+        # Отправляем сообщение о начале обработки
+        processing_msg = await code_message.answer("🔄 Обрабатываю код авторизации...")
+        
+        try:
+            # Обрабатываем полученный код авторизации
+            success, message_text = await process_auth_code(
+                code_message.from_user.id, 
+                code,
+                db,
+                {
+                    "id": code_message.from_user.id,
+                    "username": code_message.from_user.username,
+                    "full_name": code_message.from_user.full_name,
+                    "is_bot": code_message.from_user.is_bot,
+                    "language_code": code_message.from_user.language_code
+                }
+            )
+
+            await processing_msg.edit_text(message_text)
+            
+            if not success:
+                await code_message.answer(
+                    "Попробуйте еще раз или используйте /manualtoken для ручного ввода токена"
+                )
+                
+        except Exception as e:
+            logging.error(f"Ошибка при обработке кода: {e}")
+            await processing_msg.edit_text(
+                "❌ Произошла ошибка при обработке кода.\n"
+                "Попробуйте еще раз или используйте /manualtoken"
+            )
 
 
 # Команда /manualtoken для ручного создания токена

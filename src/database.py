@@ -52,7 +52,7 @@ class Token(Base):  # type: ignore
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     user = relationship("User", back_populates="tokens")  # type: ignore
-
+    auth_message_id = Column(String(255), nullable=True)
 
 class Event(Base):  # type: ignore
     """Модель события календаря"""

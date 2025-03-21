@@ -64,6 +64,7 @@ class UserQueries(Queries):
 
 
 class TokenQueries(Queries):
+    
     def save_token(self, user_id: int, token_data: dict) -> bool:  # type: ignore
         """Сохраняет токен для пользователя"""
         session = self.db.get_session()
@@ -117,9 +118,24 @@ class TokenQueries(Queries):
             return None, None
         finally:
             session.close()
+    
+    def delete_token_by_user_id(self, user_id: int) -> bool:
+        """Удаляет токен для пользователя"""
+        session = self.db.get_session()
+        try:
+            token = session.query(Token).filter(Token.user_id == user_id).first()
+            session.delete(token)
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Ошибка при удалении токена: {e}")
+            return False
+        finally:
+            session.close()
 
     def save_auth_state(
-        self, user_id: int, flow_state: dict, redirect_uri: str  # type: ignore
+        self, user_id: int, flow_state: dict, redirect_uri: str # type: ignore
     ) -> bool:
         """Сохранение состояния авторизации"""
         session = self.db.get_session()
@@ -148,6 +164,31 @@ class TokenQueries(Queries):
             session.rollback()
             logger.error(f"Ошибка при сохранении состояния авторизации: {e}")
             return False
+        finally:
+            session.close()
+            
+    def set_auth_message_id(self, user_id: int, auth_message_id: str) -> bool:
+        """Устанавливает ID сообщения авторизации"""
+        session = self.db.get_session()
+        try:
+            token = session.query(Token).filter(Token.user_id == user_id).first()
+            token.auth_message_id = str(auth_message_id)
+            session.commit()
+            logger.info(f"ID сообщения авторизации установлен для пользователя: {user_id}")
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Ошибка при установке ID сообщения авторизации: {e}")
+            return False
+    def get_auth_message_id(self, user_id: int) -> int | None:
+        """Получает ID сообщения авторизации"""
+        session = self.db.get_session()
+        try:
+            token = session.query(Token).filter(Token.user_id == user_id).first()
+            return token.auth_message_id if token else None
+        except Exception as e:
+            logger.error(f"Ошибка при получении ID сообщения авторизации: {e}")
+            return None
         finally:
             session.close()
 
@@ -263,7 +304,7 @@ class NotificationQueries(Queries):
 
 
 class DatabaseQueries:
-    """Общий класс для доступа ко всем запросам к базе данных"""
+    """Общий класс для доступа ко всем запросам к базе данных (ЖУЖУН)"""
 
     def __init__(self, path: str):
         self.db = Database(path)
