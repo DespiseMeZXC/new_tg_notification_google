@@ -1,19 +1,20 @@
 import os
 import asyncio
 import logging
-import json
 import signal
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message, ForceReply
 from aiogram.utils.markdown import hbold
 from dotenv import load_dotenv
-from pathlib import Path
+
 from google_calendar_client import GoogleCalendarClient
 from queries import DatabaseQueries
+from services import BotService
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -27,6 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Инициализация бота и диспетчера
 db = DatabaseQueries(str(BASE_DIR / "db.sqlite"))
 calendar_client = GoogleCalendarClient(db)
+bot_service = BotService(db, calendar_client)
 bot = Bot(token=str(os.getenv("BOT_TOKEN")))
 dp = Dispatcher()
 
@@ -191,27 +193,9 @@ async def set_token_command(message: Message) -> None:
         )
         return
 
-    try:
-        # Проверяем, что это валидный JSON
-        token_data = json.loads(token_json)
-
-        # Проверяем наличие необходимых полей
-        if "token" not in token_data or "refresh_token" not in token_data:
-            await message.answer(
-                "❌ JSON-данные токена должны содержать поля 'token' и 'refresh_token'"
-            )
-            return
-
-        await message.answer(
-            "✅ Токен успешно сохранен! Теперь вы можете использовать команды /week и /check."
-        )
-    except json.JSONDecodeError:
-        await message.answer(
-            "❌ Неверный формат JSON. Пожалуйста, проверьте данные и попробуйте снова."
-        )
-    except Exception as e:
-        logging.error(f"Ошибка при установке токена вручную: {e}")
-        await message.answer(f"❌ Произошла ошибка: {str(e)}")
+    # Валидируем токен
+    is_valid, message_text, token_data = bot_service.validate_token_json(token_json)
+    await message.answer(message_text)
 
 
 # Команда /week для просмотра встреч на неделю
@@ -222,80 +206,36 @@ async def check_week_meetings(message: Message) -> None:
         return
 
     user_id = message.from_user.id
-
-    # Проверяем наличие токена в базе данных
-    if not db.tokens.get_token(user_id):
-        await message.answer(
-            "Вы не авторизованы в Google Calendar.\n"
-            "Используйте команду /auth для авторизации."
-        )
-        return
-
     await message.answer("Проверяю ваши онлайн-встречи на неделю...")
 
-    try:
-        # Получаем события на ближайшие 7 дней
-        # Получаем текущее время в UTC для фильтрации только будущих встреч
-        now = datetime.now(timezone.utc)
+    success, error_message, meetings_by_day = await bot_service.get_week_meetings(user_id)
+    
+    if not success:
+        await message.answer(error_message)
+        return
+        
+    if not meetings_by_day:
+        await message.answer("У вас нет предстоящих онлайн-встреч на неделю.")
+        return
+        
+    # Отправляем встречи по дням
+    for day, day_events in sorted(meetings_by_day.items()):
+        day_message = f"📆 {hbold(f'Онлайн-встречи на {day}:')}\n\n"
+        has_meetings = False
 
-        # Запрашиваем события начиная с текущего момента
-        events = await calendar_client.get_upcoming_events(
-            user_id=user_id,
-            time_min=now,
-            time_max=now + timedelta(days=7),
-            limit=20,
-        )
-
-        # Фильтруем события
-        active_events = []
-        for event in events:
-            # Пропускаем события без ссылки на подключение
-            if "hangoutLink" not in event:
-                continue
-
-            end_time = event["end"].get("dateTime", event["end"].get("date"))
-            end_dt = safe_parse_datetime(end_time)
-            if end_dt > now:
-                active_events.append(event)
-
-        if not active_events:
-            await message.answer("У вас нет предстоящих онлайн-встреч на неделю.")
-            return
-
-        # Группируем встречи по дням
-        meetings_by_day: dict[str, list[dict]] = {}  # type: ignore
-        for event in active_events:
+        for event in day_events:
             start_time = event["start"].get("dateTime", event["start"].get("date"))
-            start_dt = safe_parse_datetime(start_time)
-            day_key = start_dt.strftime("%d.%m.%Y")
+            start_dt = bot_service.safe_parse_datetime(start_time)
 
-            if day_key not in meetings_by_day:
-                meetings_by_day[day_key] = []
+            day_message += (
+                f"🕒 {start_dt.strftime('%H:%M')} - {hbold(event['summary'])}\n"
+            )
+            day_message += f"🔗 {event['hangoutLink']}\n\n"
+            has_meetings = True
 
-            meetings_by_day[day_key].append(event)
-
-        # Отправляем встречи по дням
-        for day, day_events in sorted(meetings_by_day.items()):
-            day_message = f"📆 {hbold(f'Онлайн-встречи на {day}:')}\n\n"
-            has_meetings = False
-
-            for event in day_events:
-                start_time = event["start"].get("dateTime", event["start"].get("date"))
-                start_dt = safe_parse_datetime(start_time)
-
-                day_message += (
-                    f"🕒 {start_dt.strftime('%H:%M')} - {hbold(event['summary'])}\n"
-                )
-                day_message += f"🔗 {event['hangoutLink']}\n\n"
-                has_meetings = True
-
-            # Отправляем сообщение если есть встречи
-            if has_meetings:
-                await message.answer(day_message, parse_mode="HTML")
-
-    except Exception as e:
-        logging.error(f"Ошибка при получении встреч на неделю: {e}")
-        await message.answer("Произошла ошибка при получении данных о встречах.")
+        # Отправляем сообщение если есть встречи
+        if has_meetings:
+            await message.answer(day_message, parse_mode="HTML")
 
 
 # Команда /reset для сброса кэша обработанных встреч
@@ -309,21 +249,6 @@ async def reset_processed_events(message: Message) -> None:
     except Exception as e:
         logging.error(f"MOCK:Ошибка при сбросе данных: {e}")
         await message.answer("❌ MOCK: Произошла ошибка при сбросе данных.")
-
-
-# Функция для безопасного парсинга даты
-def safe_parse_datetime(date_str: str) -> datetime:
-    try:
-        if date_str.endswith("Z"):
-            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        elif "+" in date_str or "-" in date_str and "T" in date_str:
-            return datetime.fromisoformat(date_str)
-        else:
-            # Если дата без часового пояса, добавляем UTC
-            return datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)
-    except Exception as e:
-        logging.error(f"Ошибка при парсинге даты {date_str}: {e}")
-        return datetime.now(timezone.utc)
 
 
 # Запуск бота
