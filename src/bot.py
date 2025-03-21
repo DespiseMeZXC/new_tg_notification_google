@@ -12,11 +12,7 @@ from aiogram.types import Message, ForceReply
 from aiogram.utils.markdown import hbold
 from dotenv import load_dotenv
 from pathlib import Path
-from google_calendar import (
-    get_upcoming_events,
-    create_auth_url,
-    process_auth_code,
-)
+from google_calendar_client import GoogleCalendarClient
 from queries import DatabaseQueries
 
 # Загрузка переменных окружения
@@ -30,6 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Инициализация бота и диспетчера
 db = DatabaseQueries(str(BASE_DIR / "db.sqlite"))
+calendar_client = GoogleCalendarClient(db)
 bot = Bot(token=str(os.getenv("BOT_TOKEN")))
 dp = Dispatcher()
 
@@ -80,7 +77,7 @@ async def server_auth_command(message: Message) -> None:
 
     # Создаем URL для авторизации с правильными параметрами
     db.tokens.delete_token_by_user_id(message.from_user.id)
-    auth_url = create_auth_url(message.from_user.id, db)
+    auth_url = calendar_client.create_auth_url(message.from_user.id)
 
     if isinstance(auth_url, str) and auth_url.startswith("Ошибка"):
         await message.answer(
@@ -132,10 +129,9 @@ async def server_auth_command(message: Message) -> None:
 
         try:
             # Обрабатываем полученный код авторизации
-            success, message_text = await process_auth_code(
+            success, message_text = await calendar_client.process_auth_code(
                 code_message.from_user.id,
                 code,
-                db,
                 {
                     "id": code_message.from_user.id,
                     "username": code_message.from_user.username,
@@ -243,11 +239,10 @@ async def check_week_meetings(message: Message) -> None:
         now = datetime.now(timezone.utc)
 
         # Запрашиваем события начиная с текущего момента
-        events = await get_upcoming_events(
+        events = await calendar_client.get_upcoming_events(
+            user_id=user_id,
             time_min=now,
             time_max=now + timedelta(days=7),
-            user_id=user_id,
-            db=db,
             limit=20,
         )
 
