@@ -16,21 +16,23 @@ class Queries(abc.ABC):
 
 class UserQueries(Queries):
 
-    def add_user(self, user_data: dict) -> User | None:
+    def add_user(self, user_data: dict) -> User | None:  # type: ignore
         """Добавляет нового пользователя в базу данных"""
         session = self.db.get_session()
         try:
             # Проверяем существует ли пользователь
-            existing_user = session.query(User).filter(User.id == user_data["id"]).first()
+            existing_user = (
+                session.query(User).filter(User.id == user_data["id"]).first()
+            )
             if existing_user:
                 # Обновляем существующего пользователя
                 existing_user.username = user_data["username"]
-                existing_user.full_name = user_data["full_name"] 
+                existing_user.full_name = user_data["full_name"]
                 existing_user.is_bot = user_data["is_bot"]
                 existing_user.language_code = user_data["language_code"]
                 session.commit()
-                return session.merge(existing_user)
-            
+                return session.merge(existing_user)  # type: ignore
+
             # Создаем нового пользователя
             user = User(
                 id=user_data["id"],
@@ -43,7 +45,7 @@ class UserQueries(Queries):
             session.commit()
             # Возвращаем объект, привязанный к сессии
             logger.info(f"Успешно добавлен пользователь: {user}")
-            return session.merge(user)
+            return session.merge(user)  # type: ignore
         except Exception as e:
             session.rollback()
             logger.error(f"Ошибка при добавлении пользователя: {e}")
@@ -66,7 +68,7 @@ class UserQueries(Queries):
 
 
 class TokenQueries(Queries):
-    
+
     def save_token(self, user_id: int, token_data: dict) -> bool:  # type: ignore
         """Сохраняет токен для пользователя"""
         session = self.db.get_session()
@@ -124,7 +126,7 @@ class TokenQueries(Queries):
             return None, None
         finally:
             session.close()
-    
+
     def delete_token_by_user_id(self, user_id: int) -> bool:
         """Удаляет токен для пользователя"""
         session = self.db.get_session()
@@ -142,7 +144,7 @@ class TokenQueries(Queries):
             session.close()
 
     def save_auth_state(
-        self, user_id: int, flow_state: dict, redirect_uri: str # type: ignore
+        self, user_id: int, flow_state: dict, redirect_uri: str  # type: ignore
     ) -> bool:
         """Сохранение состояния авторизации"""
         session = self.db.get_session()
@@ -173,7 +175,7 @@ class TokenQueries(Queries):
             return False
         finally:
             session.close()
-            
+
     def set_auth_message_id(self, user_id: int, auth_message_id: str) -> bool:
         """Устанавливает ID сообщения авторизации"""
         session = self.db.get_session()
@@ -181,12 +183,15 @@ class TokenQueries(Queries):
             token = session.query(Token).filter(Token.user_id == user_id).first()
             token.auth_message_id = str(auth_message_id)
             session.commit()
-            logger.info(f"ID сообщения авторизации установлен для пользователя: {user_id}")
+            logger.info(
+                f"ID сообщения авторизации установлен для пользователя: {user_id}"
+            )
             return True
         except Exception as e:
             session.rollback()
             logger.error(f"Ошибка при установке ID сообщения авторизации: {e}")
             return False
+
     def get_auth_message_id(self, user_id: int) -> int | None:
         """Получает ID сообщения авторизации"""
         session = self.db.get_session()

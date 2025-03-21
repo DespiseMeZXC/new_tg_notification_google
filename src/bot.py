@@ -33,18 +33,20 @@ db = DatabaseQueries(str(BASE_DIR / "db.sqlite"))
 bot = Bot(token=str(os.getenv("BOT_TOKEN")))
 dp = Dispatcher()
 
+
 # Добавляем обработчик сигналов для корректного завершения
 async def on_shutdown(signal_type):
     """Корректное завершение работы бота при получении сигнала"""
     logging.info(f"Получен сигнал {signal_type.name}, завершаю работу...")
-    
+
     # Закрываем соединения с базой данных
     db.db.close_all_sessions()
-    
+
     # Закрываем сессию бота
     await bot.session.close()
-    
+
     sys.exit(0)
+
 
 # Команда /start
 @dp.message(Command("start"))
@@ -82,8 +84,7 @@ async def server_auth_command(message: Message) -> None:
 
     if isinstance(auth_url, str) and auth_url.startswith("Ошибка"):
         await message.answer(
-            f"❌ {auth_url}\n"
-            "Пожалуйста, сообщите об этой ошибке администратору."
+            f"❌ {auth_url}\n" "Пожалуйста, сообщите об этой ошибке администратору."
         )
         return
     # Отправляем сообщение с инструкцией и сохраняем его ID
@@ -94,41 +95,45 @@ async def server_auth_command(message: Message) -> None:
         "2️⃣ Войдите в аккаунт Google и разрешите доступ к календарю\n\n"
         "3️⃣ Вы получите код авторизации. Скопируйте его и отправьте в ответ на это сообщение\n\n"
         "❗ Если возникает ошибка при авторизации:\n"
-        "- Убедитесь, что вы используете личный аккаунт Google (не корпоративный)\n" 
+        "- Убедитесь, что вы используете личный аккаунт Google (не корпоративный)\n"
         "- Попробуйте открыть ссылку в режиме инкогнито\n"
         "- Или используйте команду /manualtoken",
         parse_mode="HTML",
         reply_markup=ForceReply(
-            selective=True,
-            input_field_placeholder="Вставьте код авторизации"
-        )
-        )
+            selective=True, input_field_placeholder="Вставьте код авторизации"
+        ),
+    )
     db.tokens.set_auth_message_id(message.from_user.id, str(auth_message.message_id))
-    
+
     # Добавляем обработчик для получения кода авторизации
     @dp.message()
     async def handle_auth_code(code_message: Message) -> None:
-        auth_message_id = db.tokens.get_auth_message_id(code_message.from_user.id)
-        
-        if (not code_message.reply_to_message or 
-            code_message.reply_to_message.message_id != int(auth_message_id) or  # Преобразуем в int
-            not code_message.from_user or 
-            code_message.from_user.id != code_message.from_user.id):
+        auth_message_id = db.tokens.get_auth_message_id(code_message.from_user.id)  # type: ignore
+
+        if (
+            not code_message.reply_to_message
+            or code_message.reply_to_message.message_id
+            != int(auth_message_id)  # type: ignore
+            or not code_message.from_user
+            or code_message.from_user.id != code_message.from_user.id
+        ):
             logging.info("Условия не совпадают, пропускаем обработку")
             return
 
-        code = code_message.text.strip()
+        code = code_message.text.strip()  # type: ignore
         if not code:
-            await code_message.answer("❌ Пожалуйста, отправьте корректный код авторизации")
+            await code_message.answer(
+                "❌ Пожалуйста, отправьте корректный код авторизации"
+            )
             return
 
         # Отправляем сообщение о начале обработки
         processing_msg = await code_message.answer("🔄 Обрабатываю код авторизации...")
-        
+
         try:
             # Обрабатываем полученный код авторизации
             success, message_text = await process_auth_code(
-                code_message.from_user.id, 
+                code_message.from_user.id,
                 code,
                 db,
                 {
@@ -136,17 +141,17 @@ async def server_auth_command(message: Message) -> None:
                     "username": code_message.from_user.username,
                     "full_name": code_message.from_user.full_name,
                     "is_bot": code_message.from_user.is_bot,
-                    "language_code": code_message.from_user.language_code
-                }
+                    "language_code": code_message.from_user.language_code,
+                },
             )
 
             await processing_msg.edit_text(message_text)
-            
+
             if not success:
                 await code_message.answer(
                     "Попробуйте еще раз или используйте /manualtoken для ручного ввода токена"
                 )
-                
+
         except Exception as e:
             await processing_msg.edit_text(
                 "❌ Произошла ошибка при обработке кода.\n"
@@ -331,9 +336,9 @@ async def main() -> None:
     # Регистрируем обработчики сигналов
     for signal_type in (signal.SIGINT, signal.SIGTERM):
         asyncio.get_event_loop().add_signal_handler(
-            signal_type, lambda s=signal_type: asyncio.create_task(on_shutdown(s))
+            signal_type, lambda s=signal_type: asyncio.create_task(on_shutdown(s))  # type: ignore
         )
-    
+
     # Запускаем бота
     await dp.start_polling(bot)
 
@@ -343,12 +348,12 @@ if __name__ == "__main__":
     try:
         # Создаем файл блокировки
         lock_file = BASE_DIR / ".bot.lock"
-        
+
         if lock_file.exists():
             # Проверяем, активен ли процесс
             with open(lock_file, "r") as f:
                 pid = int(f.read().strip())
-            
+
             try:
                 # Проверяем, существует ли процесс с таким PID
                 os.kill(pid, 0)
@@ -357,11 +362,11 @@ if __name__ == "__main__":
             except OSError:
                 # Процесс не существует, можно продолжить
                 logging.warning(f"Найден устаревший файл блокировки. Перезаписываю.")
-        
+
         # Записываем текущий PID в файл блокировки
         with open(lock_file, "w") as f:
             f.write(str(os.getpid()))
-        
+
         # Запускаем бота
         asyncio.run(main())
     finally:

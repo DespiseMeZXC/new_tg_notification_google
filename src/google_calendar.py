@@ -84,7 +84,9 @@ def create_auth_url(user_id: int, db: DatabaseQueries) -> Any:
         return f"Ошибка при создании URL авторизации: {str(e)}"
 
 
-async def process_auth_code(user_id: int, code: str, db: DatabaseQueries, user_data: dict) -> Any:
+async def process_auth_code(
+    user_id: int, code: str, db: DatabaseQueries, user_data: dict
+) -> Any:
     """Обрабатывает код авторизации и сохраняет токен."""
     try:
         # Получаем сохраненное состояние
