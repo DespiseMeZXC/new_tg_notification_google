@@ -55,15 +55,6 @@ async def command_start(message: Message) -> None:
         return
 
     user_id = message.from_user.id
-    # Проверяем, существует ли пользователь в базе данных
-    if not db.users.get_user(user_id):
-        # Если нет, создаем нового пользователя
-        full_name = (
-            message.from_user.full_name
-            if message.from_user.full_name
-            else "Пользователь"
-        )
-        db.users.add_user(user_id, full_name)
 
     await message.answer(
         f"Привет, {message.from_user.full_name if message.from_user.full_name else 'пользователь'}!\n"
@@ -169,8 +160,16 @@ async def process_auth_code_command(message: Message) -> None:
     if not message.from_user:
         logging.error("Не удалось получить пользователя из сообщения")
         return
-
+    print(message.from_user)
     user_id = message.from_user.id
+    user_data = {
+        "id": message.from_user.id,
+        "username": message.from_user.username,
+        "full_name": f"{message.from_user.last_name} {message.from_user.first_name}",
+        "is_bot": message.from_user.is_bot,
+        "language_code": message.from_user.language_code,
+    }
+        
 
     # Проверяем наличие кода
     if message.text is not None:
@@ -191,7 +190,7 @@ async def process_auth_code_command(message: Message) -> None:
 
     try:
         # Обрабатываем код авторизации
-        success, result = await process_auth_code(user_id, code, db)
+        success, result = await process_auth_code(user_id, code, db, user_data)
 
         # Обновляем сообщение с результатом
         await processing_msg.edit_text(result)

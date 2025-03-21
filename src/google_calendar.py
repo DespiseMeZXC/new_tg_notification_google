@@ -87,7 +87,7 @@ def create_auth_url(user_id: int, db: DatabaseQueries) -> Any:
         return f"Ошибка при создании URL авторизации: {str(e)}"
 
 
-async def process_auth_code(user_id: int, code: str, db: DatabaseQueries) -> Any:
+async def process_auth_code(user_id: int, code: str, db: DatabaseQueries, user_data: dict) -> Any:
     """Обрабатывает код авторизации и сохраняет токен."""
     try:
         # Получаем сохраненное состояние
@@ -118,6 +118,7 @@ async def process_auth_code(user_id: int, code: str, db: DatabaseQueries) -> Any
         creds = flow.credentials
 
         # Сохраняем учетные данные
+        user = db.users.add_user(user_data)
         db.tokens.save_token(user_id, json.loads(creds.to_json()))
 
         return (

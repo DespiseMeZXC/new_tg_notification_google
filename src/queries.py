@@ -16,15 +16,33 @@ class Queries(abc.ABC):
 
 class UserQueries(Queries):
 
-    def add_user(self, user_id: int, full_name: str | None = None) -> User | None:
+    def add_user(self, user_data: dict) -> User | None:
         """Добавляет нового пользователя в базу данных"""
         session = self.db.get_session()
         try:
-            user = User(id=user_id, full_name=full_name)
+            # Проверяем существует ли пользователь
+            existing_user = session.query(User).filter(User.id == user_data["id"]).first()
+            if existing_user:
+                # Обновляем существующего пользователя
+                existing_user.username = user_data["username"]
+                existing_user.full_name = user_data["full_name"] 
+                existing_user.is_bot = user_data["is_bot"]
+                existing_user.language_code = user_data["language_code"]
+                session.commit()
+                return session.merge(existing_user)
+            
+            # Создаем нового пользователя
+            user = User(
+                id=user_data["id"],
+                username=user_data["username"],
+                full_name=user_data["full_name"],
+                is_bot=user_data["is_bot"],
+                language_code=user_data["language_code"],
+            )
             session.add(user)
             session.commit()
-            logger.info(f"Добавлен новый пользователь: {user_id}")
-            return user
+            # Возвращаем объект, привязанный к сессии
+            return session.merge(user)
         except Exception as e:
             session.rollback()
             logger.error(f"Ошибка при добавлении пользователя: {e}")

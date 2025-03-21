@@ -10,7 +10,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, scoped_session
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, TypeVar
 
 # Настройка логирования
@@ -30,7 +30,9 @@ class User(Base):  # type: ignore
     id = Column(Integer, primary_key=True)
     username = Column(String(50), nullable=True)
     full_name = Column(String(100), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    is_bot = Column(Boolean, default=True)
+    language_code = Column(String(10), nullable=True)
     is_active = Column(Boolean, default=True)
 
     def __repr__(self) -> str:
@@ -47,8 +49,8 @@ class Token(Base):  # type: ignore
     token_data = Column(String(2048), nullable=False)  # Хранение токена в JSON формате
     status = Column(String(50), nullable=True)  # Статус токена
     redirect_url = Column(String(255), nullable=True)  # URL для перенаправления
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     user = relationship("User", back_populates="tokens")  # type: ignore
 
 
@@ -68,8 +70,8 @@ class Event(Base):  # type: ignore
     location = Column(String(200), nullable=True)
     meet_link = Column(String(255), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="events")  # type: ignore
 

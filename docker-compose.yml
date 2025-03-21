@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  calendar-bot:
+  bot:
     build:
       context: .
       dockerfile: Dockerfile
