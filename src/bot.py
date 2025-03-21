@@ -157,6 +157,11 @@ async def server_auth_command(message: Message) -> None:
             )
 
 
+@dp.message(Command("check"))
+async def check_command(message: Message) -> None:
+    await message.answer("Проверяю ваши онлайн-встречи на неделю...")
+
+
 # Команда /manualtoken для ручного создания токена
 @dp.message(Command("manualtoken"))
 async def manual_token_command(message: Message) -> None:
@@ -208,16 +213,18 @@ async def check_week_meetings(message: Message) -> None:
     user_id = message.from_user.id
     await message.answer("Проверяю ваши онлайн-встречи на неделю...")
 
-    success, error_message, meetings_by_day = await bot_service.get_week_meetings(user_id)
-    
+    success, error_message, meetings_by_day = await bot_service.get_week_meetings(
+        user_id
+    )
+
     if not success:
         await message.answer(error_message)
         return
-        
+
     if not meetings_by_day:
         await message.answer("У вас нет предстоящих онлайн-встреч на неделю.")
         return
-        
+
     # Отправляем встречи по дням
     for day, day_events in sorted(meetings_by_day.items()):
         day_message = f"📆 {hbold(f'Онлайн-встречи на {day}:')}\n\n"

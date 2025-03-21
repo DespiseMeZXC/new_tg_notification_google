@@ -12,29 +12,48 @@ class BotService:
         self.db = db
         self.calendar_client = calendar_client
 
-
-    def validate_token_json(self, token_json: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    def validate_token_json(
+        self, token_json: str
+    ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """Проверяет валидность JSON-данных токена"""
         try:
             token_data = json.loads(token_json)
-            
+
             # Проверяем наличие необходимых полей
             if "token" not in token_data or "refresh_token" not in token_data:
-                return False, "❌ JSON-данные токена должны содержать поля 'token' и 'refresh_token'", None
-                
-            return True, "✅ Токен успешно сохранен! Теперь вы можете использовать команды /week и /check.", token_data
+                return (
+                    False,
+                    "❌ JSON-данные токена должны содержать поля 'token' и 'refresh_token'",
+                    None,
+                )
+
+            return (
+                True,
+                "✅ Токен успешно сохранен! Теперь вы можете использовать команды /week и /check.",
+                token_data,
+            )
         except json.JSONDecodeError:
-            return False, "❌ Неверный формат JSON. Пожалуйста, проверьте данные и попробуйте снова.", None
+            return (
+                False,
+                "❌ Неверный формат JSON. Пожалуйста, проверьте данные и попробуйте снова.",
+                None,
+            )
         except Exception as e:
             logging.error(f"Ошибка при валидации токена: {e}")
             return False, f"❌ Произошла ошибка: {str(e)}", None
 
-    async def get_week_meetings(self, user_id: int) -> Tuple[bool, str, Dict[str, List[Dict[str, Any]]]]:
+    async def get_week_meetings(
+        self, user_id: int
+    ) -> Tuple[bool, str, Dict[str, List[Dict[str, Any]]]]:
         """Получает встречи на неделю и группирует их по дням"""
         try:
             # Проверяем наличие токена в базе данных
             if not self.db.tokens.get_token(user_id):
-                return False, "Вы не авторизованы в Google Calendar.\nИспользуйте команду /auth для авторизации.", {}
+                return (
+                    False,
+                    "Вы не авторизованы в Google Calendar.\nИспользуйте команду /auth для авторизации.",
+                    {},
+                )
 
             # Получаем текущее время в UTC для фильтрации только будущих встреч
             now = datetime.now(timezone.utc)

@@ -43,9 +43,9 @@ class GoogleCalendarClient:
             else:
                 logger.info(f"Учетные данные не найдены для пользователя: {user_id}")
                 return None
-        
+
         logger.info(f"Учетные данные найдены для пользователя: {user_id}")
-        return creds
+        return creds  # type: ignore
 
     def create_auth_url(self, user_id: int) -> str:
         """Создает URL для авторизации и сохраняет состояние."""
@@ -79,7 +79,7 @@ class GoogleCalendarClient:
 
             self.db.tokens.save_auth_state(user_id, flow_state, flow.redirect_uri)
             logger.info(f"URL авторизации создан для пользователя: {user_id}")
-            return auth_url
+            return auth_url  # type: ignore
         except Exception as e:
             logging.error(f"Ошибка при создании URL авторизации: {e}")
             return f"Ошибка при создании URL авторизации: {str(e)}"
@@ -194,7 +194,7 @@ class GoogleCalendarClient:
             events = [event for event in events if "hangoutLink" in event]
 
             logger.info(f"Получено {len(events)} событий из календаря")
-            return events
+            return events  # type: ignore
         except Exception as e:
             logger.error(f"Ошибка при получении событий: {e}")
-            return [] 
+            return []
