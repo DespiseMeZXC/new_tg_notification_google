@@ -34,3 +34,19 @@ tasks:
       - docker system prune -f
       - docker rmi new_tg_notification-calendar-bot
       - docker system prune -f
+
+  format:
+    desc: "Форматирование кода с помощью black"
+    cmds:
+      - uv run black src/
+
+  typecheck:
+    desc: "Проверка типов с помощью mypy"
+    cmds:
+      - uv run mypy src/
+
+  lint:
+    desc: "Запуск форматирования и проверки типов"
+    cmds:
+      - task: format
+      - task: typecheck
