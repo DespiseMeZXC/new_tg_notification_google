@@ -10,9 +10,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
 # Устанавливаем зависимости, копируем файлы и настраиваем приложение
-RUN apt-get update && apt-get install -y --no-install-recommends gcc python3-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data
+# не обязательно ставить всё это (оно уже с офиц образом стоит всё)
+# RUN apt-get update && apt-get install -y --no-install-recommends gcc python3-dev \
+#     && rm -rf /var/lib/apt/lists/* \
+#     && mkdir -p /data
 
 # Копируем бинарный файл uv из официального образа для более быстрой установки
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/

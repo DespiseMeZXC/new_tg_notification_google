@@ -8,3 +8,4 @@ started_events.json
 token_*.json
 *.db
 *.sqlite
+.bot.lock
