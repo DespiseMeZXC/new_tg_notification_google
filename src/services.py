@@ -5,14 +5,18 @@ from typing import Dict, List, Tuple, Any, Optional
 
 from aiogram.types import Message
 from aiogram.utils.markdown import hbold
+from aiogram import Bot
 
 from google_calendar_client import GoogleCalendarClient
 from queries import DatabaseQueries
 
 
 class BotService:
-    def __init__(self, db: DatabaseQueries, calendar_client: GoogleCalendarClient):
+    def __init__(
+        self, db: DatabaseQueries, calendar_client: GoogleCalendarClient, bot: Bot
+    ):
         self.db = db
+        self.bot = bot
         self.calendar_client = calendar_client
 
     def validate_token_json(
@@ -118,37 +122,67 @@ class BotService:
             logging.error(f"Ошибка при парсинге даты {date_str}: {e}")
             return datetime.now(timezone.utc)
 
-    async def send_meetings_by_day(
-        self, message: Message, meetings_by_day: dict, is_check: bool = False
+    async def send_meetings_check_by_day(
+        self,
+        user_id: int,
+        meetings_by_day: dict,
+    ) -> None:
+        logging.info(f"Обрабатываем встречи: {meetings_by_day}")
+        for day, day_events in sorted(meetings_by_day.items()):
+            day_message = "Обнаружены новые онлайн-встречи:\n"
+            logging.info(f"Обрабатываем день: {day}")
+            day_message += f"📆 {hbold(f'Онлайн-встречи на {day}:')}\n"
+
+            has_new_events = False
+            for event in day_events:
+                notification = self.db.notifications.get_notification(
+                    event["id"], user_id  # type: ignore
+                )
+                if notification:
+                    logging.info(
+                        f"Уведомление для события {event['id']} уже существует"
+                    )
+                    continue
+
+                has_new_events = True
+                start_time = event["start"].get("dateTime", event["start"].get("date"))
+                start_dt = self.safe_parse_datetime(start_time)
+                end_time = event["end"].get("dateTime", event["end"].get("date"))
+                end_dt = self.safe_parse_datetime(end_time)
+                day_message += (
+                    f"📝 {hbold('Название:')} {event['summary']}\n"
+                    f"🕒 {hbold('Время:')} {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}\n"
+                    f"🔗 {hbold('Ссылка:')} {event['hangoutLink']}\n\n"
+                )
+                self.db.notifications.create_notification(
+                    event["id"], user_id  # type: ignore
+                )
+
+            if has_new_events:
+                await self.bot.send_message(user_id, day_message, parse_mode="HTML")
+
+    async def send_meetings_week_by_day(
+        self,
+        user_id: int,
+        meetings_by_day: dict,
     ) -> None:
         """Отправляет сообщения со встречами, сгруппированными по дням"""
         for day, day_events in sorted(meetings_by_day.items()):
-            day_message = f"📆 {hbold(f'Онлайн-встречи на {day}:')}\n\n"
-            has_meetings = False
+            day_message = f"📆 {hbold(f'Онлайн-встречи на {day}:')}\n"
 
             for event in day_events:
-                if is_check:
-                    notification = self.db.notifications.get_notification(
-                        event["id"], message.from_user.id  # type: ignore
-                    )
-                    if notification:
-                        logging.info(
-                            f"Уведомление для события {event['id']} уже существует"
-                        )
-                        continue
                 start_time = event["start"].get("dateTime", event["start"].get("date"))
                 start_dt = self.safe_parse_datetime(start_time)
-
+                end_time = event["end"].get("dateTime", event["end"].get("date"))
+                end_dt = self.safe_parse_datetime(end_time)
                 day_message += (
-                    f"🕒 {start_dt.strftime('%H:%M')} - {hbold(event['summary'])}\n"
+                    f"📝 {hbold('Название:')} {event['summary']}\n"
+                    f"🕒 {hbold('Время:')} {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}\n"
+                    f"🔗 {hbold('Ссылка:')} {event['hangoutLink']}\n\n"
                 )
-                day_message += f"🔗 {event['hangoutLink']}\n\n"
-                has_meetings = True
-                if not is_check:
-                    self.db.notifications.create_notification(
-                        event["id"], message.from_user.id  # type: ignore
-                    )
+                self.db.notifications.create_notification(
+                    event["id"], user_id  # type: ignore
+                )
 
             # Отправляем сообщение если есть встречи
-            if has_meetings:
-                await message.answer(day_message, parse_mode="HTML")
+            await self.bot.send_message(user_id, day_message, parse_mode="HTML")

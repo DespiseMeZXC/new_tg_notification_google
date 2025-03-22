@@ -69,6 +69,19 @@ class UserQueries(Queries):
 
 class TokenQueries(Queries):
 
+    def get_all_users(self) -> Any:
+        """Получает всех пользователей"""
+        session = self.db.get_session()
+        try:
+            users = session.query(User).all()
+            list_users = [user.id for user in users]
+            return list_users
+        except Exception as e:
+            logger.error(f"Ошибка при получении всех пользователей: {e}")
+            return []
+        finally:
+            session.close()
+
     def save_token(self, user_id: int, token_data: dict) -> bool:  # type: ignore
         """Сохраняет токен для пользователя"""
         session = self.db.get_session()
@@ -242,6 +255,7 @@ class EventQueries(Queries):
                 existing_event.end_time = end_time
                 existing_event.meet_link = meet_link
                 existing_event.all_data = event_data
+                logger.info(f"Событие {event_id} обновлено")
                 return "updated"
             else:
                 # Создаем новое событие
@@ -254,6 +268,7 @@ class EventQueries(Queries):
                     user_id=user_id,
                     all_data=event_data,
                 )
+                logger.info(f"Событие {event_id} создано")
                 session.add(new_event)
 
             session.commit()
@@ -336,7 +351,11 @@ class NotificationQueries(Queries):
                 .first()
             )
             logger.info(f"Успешно получено уведомление: {notification}")
-            return notification
+            if notification:
+                return notification
+            else:
+                logger.info(f"Уведомление для события {event_id} не найдено")
+                return None
         except Exception as e:
             logger.error(f"Ошибка при получении уведомления: {e}")
             return None
@@ -345,23 +364,25 @@ class NotificationQueries(Queries):
         """Проверяет, отправлены ли все уведомления для события"""
         session = self.db.get_session()
         try:
-            notifications = (
+            # Получаем количество уведомлений для указанных событий
+            notifications_count = (
                 session.query(Notification)
                 .filter(
                     Notification.event_id.in_(event_ids),
                     Notification.user_id == user_id,
-                    Notification.is_sent == True,
                 )
-                .all()
+                .count()
             )
 
-            if not notifications:
-                logger.info(f"Уведомления для событий {event_ids} не найдены")
+            # Проверяем что количество уведомлений равно количеству событий
+            if notifications_count != len(event_ids):
+                logger.info(
+                    f"Найдено {notifications_count} уведомлений из {len(event_ids)} событий"
+                )
                 return False
 
-            all_sent = all(n.is_sent for n in notifications)
-            logger.info(f"Все уведомления отправлены: {all_sent}")
-            return all_sent
+            logger.info(f"Все уведомления найдены ({notifications_count} шт)")
+            return True
 
         except Exception as e:
             logger.error(f"Ошибка при проверке уведомлений: {e}")

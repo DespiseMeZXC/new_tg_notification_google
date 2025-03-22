@@ -27,9 +27,33 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Инициализация бота и диспетчера
 db = DatabaseQueries(str(BASE_DIR / "db.sqlite"))
 calendar_client = GoogleCalendarClient(db)
-bot_service = BotService(db, calendar_client)
 bot = Bot(token=str(os.getenv("BOT_TOKEN")))
+bot_service = BotService(db, calendar_client, bot)
 dp = Dispatcher()
+
+
+# Функция для периодической отправки сообщений
+async def schedule_meetings_check():
+    """"""
+    while True:
+        try:
+            # Получаем всех пользователей из базы
+            users = db.tokens.get_all_users()
+            for user in users:
+                success, error_message, meetings_by_day, active_events = (
+                    await bot_service.get_week_meetings(user)  # type: ignore
+                )
+                event_ids = tuple(event["id"] for event in active_events)
+                if db.notifications.check_all_notifications_sent(event_ids, user):  # type: ignore
+                    continue
+                for i in range(len(active_events)):
+                    status = db.events.save_event(user, active_events[i])  # type: ignore
+                await bot_service.send_meetings_check_by_day(user, meetings_by_day)
+                if not success:
+                    await bot.send_message(user, error_message)
+        except Exception as e:
+            logging.error(f"Ошибка при отправке спам-сообщения: {e}")
+        await asyncio.sleep(int(os.getenv("CHECK_INTERVAL", 300)))
 
 
 # Добавляем обработчик сигналов для корректного завершения
@@ -159,18 +183,18 @@ async def server_auth_command(message: Message) -> None:
 @dp.message(Command("check"))
 async def check_command(message: Message) -> None:
     message_check = await message.answer(
-        "🔍 Проверяю ваши предстоящие онлайн-встречи...\nПожалуйста, подождите."
+        "🔍 Проверяю на наличие новых встреч...\nПожалуйста, подождите."
     )
     success, error_message, meetings_by_day, active_events = (
         await bot_service.get_week_meetings(message.from_user.id)  # type: ignore
     )
     event_ids = tuple(event["id"] for event in active_events)
     if db.notifications.check_all_notifications_sent(event_ids, message.from_user.id):  # type: ignore
-        await message_check.edit_text("Все уведомления отправлены.")
+        await message_check.edit_text("Новых встреч не обнаружено.")
         return
     for i in range(len(active_events)):
         status = db.events.save_event(message.from_user.id, active_events[i])  # type: ignore
-    await bot_service.send_meetings_by_day(message, meetings_by_day, is_check=True)
+    await bot_service.send_meetings_check_by_day(message.from_user.id, meetings_by_day)  # type: ignore
     if not success:
         await message.answer(error_message)
         return
@@ -239,7 +263,7 @@ async def check_week_meetings(message: Message) -> None:
         await message.answer("У вас нет предстоящих онлайн-встреч на неделю.")
         return
 
-    await bot_service.send_meetings_by_day(message, meetings_by_day)
+    await bot_service.send_meetings_week_by_day(message.from_user.id, meetings_by_day)
 
 
 # Команда /reset для сброса кэша обработанных встреч
@@ -262,6 +286,9 @@ async def main() -> None:
         asyncio.get_event_loop().add_signal_handler(
             signal_type, lambda s=signal_type: asyncio.create_task(on_shutdown(s))  # type: ignore
         )
+
+    # Запускаем спам-сообщения
+    asyncio.create_task(schedule_meetings_check())
 
     # Запускаем бота
     await dp.start_polling(bot)
