@@ -158,16 +158,18 @@ async def server_auth_command(message: Message) -> None:
 
 @dp.message(Command("check"))
 async def check_command(message: Message) -> None:
-    message_check = await message.answer("🔍 Проверяю ваши предстоящие онлайн-встречи...\nПожалуйста, подождите.")
-    success, error_message, meetings_by_day, active_events = await bot_service.get_week_meetings(
-        message.from_user.id
+    message_check = await message.answer(
+        "🔍 Проверяю ваши предстоящие онлайн-встречи...\nПожалуйста, подождите."
     )
-    event_ids = tuple(event['id'] for event in active_events)
-    if db.notifications.check_all_notifications_sent(event_ids, message.from_user.id):
+    success, error_message, meetings_by_day, active_events = (
+        await bot_service.get_week_meetings(message.from_user.id)  # type: ignore
+    )
+    event_ids = tuple(event["id"] for event in active_events)
+    if db.notifications.check_all_notifications_sent(event_ids, message.from_user.id):  # type: ignore
         await message_check.edit_text("Все уведомления отправлены.")
         return
     for i in range(len(active_events)):
-        status = db.events.save_event(message.from_user.id, active_events[i])
+        status = db.events.save_event(message.from_user.id, active_events[i])  # type: ignore
     await bot_service.send_meetings_by_day(message, meetings_by_day, is_check=True)
     if not success:
         await message.answer(error_message)
@@ -225,8 +227,8 @@ async def check_week_meetings(message: Message) -> None:
     user_id = message.from_user.id
     await message.answer("Проверяю ваши онлайн-встречи на неделю...")
 
-    success, error_message, meetings_by_day, active_events = await bot_service.get_week_meetings(
-        user_id
+    success, error_message, meetings_by_day, active_events = (
+        await bot_service.get_week_meetings(user_id)
     )
 
     if not success:
@@ -236,7 +238,7 @@ async def check_week_meetings(message: Message) -> None:
     if not meetings_by_day:
         await message.answer("У вас нет предстоящих онлайн-встреч на неделю.")
         return
-    
+
     await bot_service.send_meetings_by_day(message, meetings_by_day)
 
 

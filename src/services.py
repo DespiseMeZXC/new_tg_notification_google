@@ -118,17 +118,23 @@ class BotService:
             logging.error(f"Ошибка при парсинге даты {date_str}: {e}")
             return datetime.now(timezone.utc)
 
-    async def send_meetings_by_day(self, message: Message, meetings_by_day: dict, is_check: bool = False) -> None:
+    async def send_meetings_by_day(
+        self, message: Message, meetings_by_day: dict, is_check: bool = False
+    ) -> None:
         """Отправляет сообщения со встречами, сгруппированными по дням"""
         for day, day_events in sorted(meetings_by_day.items()):
             day_message = f"📆 {hbold(f'Онлайн-встречи на {day}:')}\n\n"
             has_meetings = False
-                
+
             for event in day_events:
                 if is_check:
-                    notification = self.db.notifications.get_notification(event['id'], message.from_user.id)
+                    notification = self.db.notifications.get_notification(
+                        event["id"], message.from_user.id  # type: ignore
+                    )
                     if notification:
-                        logging.info(f"Уведомление для события {event['id']} уже существует")
+                        logging.info(
+                            f"Уведомление для события {event['id']} уже существует"
+                        )
                         continue
                 start_time = event["start"].get("dateTime", event["start"].get("date"))
                 start_dt = self.safe_parse_datetime(start_time)
@@ -139,7 +145,9 @@ class BotService:
                 day_message += f"🔗 {event['hangoutLink']}\n\n"
                 has_meetings = True
                 if not is_check:
-                    self.db.notifications.create_notification(event['id'], message.from_user.id)
+                    self.db.notifications.create_notification(
+                        event["id"], message.from_user.id  # type: ignore
+                    )
 
             # Отправляем сообщение если есть встречи
             if has_meetings:
