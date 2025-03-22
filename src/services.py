@@ -49,9 +49,21 @@ class BotService:
             logging.error(f"Ошибка при валидации токена: {e}")
             return False, f"❌ Произошла ошибка: {str(e)}", None
 
+    async def send_deleted_events(
+        self, user_id: int, deleted_events: List[Dict[str, Any]]
+    ) -> None:
+        """Отправляет сообщение о удаленных событиях"""
+        message = "Встречи были отменены:\n"
+        message += "\n".join([
+            f"🗑️ {event['summary']}\n"
+            f"🕒 {event['start'].strftime('%d.%m.%Y %H:%M')} - {event['end'].strftime('%d.%m.%Y %H:%M')}" 
+            for event in deleted_events
+        ])
+        await self.bot.send_message(user_id, message)
+
     async def get_week_meetings(
         self, user_id: int
-    ) -> Tuple[bool, str, Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]]]:
+    ) -> Tuple[bool, str, Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Получает встречи на неделю и группирует их по дням"""
         try:
             # Проверяем наличие токена в базе данных
@@ -61,17 +73,31 @@ class BotService:
                     "Вы не авторизованы в Google Calendar.\nИспользуйте команду /auth для авторизации.",
                     {},
                     [],
+                    [],
                 )
 
             # Получаем текущее время в UTC для фильтрации только будущих встреч
             now = datetime.now(timezone.utc)
-
-            # Запрашиваем события начиная с текущего момента
+            
+            # Определяем день недели (0 = понедельник, 6 = воскресенье)
+            weekday = now.weekday()
+            
+            # Рассчитываем время окончания в зависимости от дня недели
+            if weekday < 5:  # Будни (пн-пт)
+                # Находим ближайшую пятницу
+                days_until_friday = 4 - weekday  # 4 = пятница
+                time_max = now + timedelta(days=days_until_friday)
+            else:  # Выходные (сб-вс)
+                # Находим пятницу следующей недели
+                days_until_next_friday = 5 + (7 - weekday)  # 5 дней до пятницы + дни до конца недели
+                time_max = now + timedelta(days=days_until_next_friday)
+            
+            # Запрашиваем события начиная с текущего момента до рассчитанной даты
             events = await self.calendar_client.get_upcoming_events(
                 user_id=user_id,
                 time_min=now,
-                time_max=now + timedelta(days=7),
-                limit=20,
+                time_max=time_max,
+                limit=50,
             )
 
             # Фильтруем события
@@ -87,8 +113,8 @@ class BotService:
                     active_events.append(event)
 
             if not active_events:
-                return True, "У вас нет предстоящих онлайн-встреч на неделю.", {}, []
-
+                return True, "У вас нет предстоящих онлайн-встреч на неделю.", {}, [], []
+            deleted_events = self.db.events.check_deleted_events(user_id, active_events, now, time_max)
             # Группируем встречи по дням
             meetings_by_day: Dict[str, List[Dict[str, Any]]] = {}
             for event in active_events:
@@ -101,11 +127,11 @@ class BotService:
 
                 meetings_by_day[day_key].append(event)
 
-            return True, "", meetings_by_day, active_events
+            return True, "", meetings_by_day, active_events, deleted_events
 
         except Exception as e:
             logging.error(f"Ошибка при получении встреч на неделю: {e}")
-            return False, "Произошла ошибка при получении данных о встречах.", {}, []
+            return False, "Произошла ошибка при получении данных о встречах.", {}, [], []
 
     @staticmethod
     def safe_parse_datetime(date_str: str) -> datetime:

@@ -40,10 +40,12 @@ async def schedule_meetings_check():
             # Получаем всех пользователей из базы
             users = db.tokens.get_all_users()
             for user in users:
-                success, error_message, meetings_by_day, active_events = (
+                success, error_message, meetings_by_day, active_events, deleted_events = (
                     await bot_service.get_week_meetings(user)  # type: ignore
                 )
                 event_ids = tuple(event["id"] for event in active_events)
+                if deleted_events:
+                    await bot_service.send_deleted_events(user, deleted_events)
                 if db.notifications.check_all_notifications_sent(event_ids, user):  # type: ignore
                     continue
                 for i in range(len(active_events)):
@@ -185,10 +187,13 @@ async def check_command(message: Message) -> None:
     message_check = await message.answer(
         "🔍 Проверяю на наличие новых встреч...\nПожалуйста, подождите."
     )
-    success, error_message, meetings_by_day, active_events = (
+    success, error_message, meetings_by_day, active_events, deleted_events = (
         await bot_service.get_week_meetings(message.from_user.id)  # type: ignore
     )
+    
     event_ids = tuple(event["id"] for event in active_events)
+    if deleted_events:
+        await bot_service.send_deleted_events(message.from_user.id, deleted_events)
     if db.notifications.check_all_notifications_sent(event_ids, message.from_user.id):  # type: ignore
         await message_check.edit_text("Новых встреч не обнаружено.")
         return
@@ -251,7 +256,7 @@ async def check_week_meetings(message: Message) -> None:
     user_id = message.from_user.id
     await message.answer("Проверяю ваши онлайн-встречи на неделю...")
 
-    success, error_message, meetings_by_day, active_events = (
+    success, error_message, meetings_by_day, active_events, deleted_events = (
         await bot_service.get_week_meetings(user_id)
     )
 

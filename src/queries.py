@@ -220,6 +220,23 @@ class TokenQueries(Queries):
 
 
 class EventQueries(Queries):
+    
+    def check_deleted_events(self, user_id: int, active_events: list[dict], time_min: datetime, time_max: datetime) -> None:
+        """Проверяет, было ли удалено какое либо событие из календаря за указанный период"""
+        session = self.db.get_session()
+        deleted_events = []
+        try:
+            all_events_db = session.query(Event).filter(Event.user_id == user_id, Event.start_time >= time_min, Event.start_time <= time_max).all()
+            for event in all_events_db:
+                if event.event_id not in [event["id"] for event in active_events]:
+                    deleted_events.append({"id": event.event_id, "summary": event.title, "start": event.start_time, "end": event.end_time})
+                    session.delete(event)
+                    session.query(Notification).filter(Notification.event_id == event.event_id).delete()
+            session.commit()
+        except Exception as e:
+            logger.error(f"Ошибка при проверке удаленных событий: {e}")
+        return deleted_events
+
     def save_event(self, user_id: int, event_data: dict) -> str:
         """Сохраняет событие в базу данных"""
         try:
@@ -309,6 +326,7 @@ class EventQueries(Queries):
 
 
 class NotificationQueries(Queries):
+    
     # Методы для работы с уведомлениями
     def create_notification(self, event_id: int, user_id: int) -> Notification | None:
         """Создает новое уведомление"""
