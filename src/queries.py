@@ -207,39 +207,60 @@ class TokenQueries(Queries):
 
 
 class EventQueries(Queries):
-    def save_event(self, user_id: int, event_data: dict) -> Any:  # type: ignore
-        """Сохраняет событие календаря"""
-        session = self.db.get_session()
+    def save_event(self, user_id: int, event_data: dict) -> str:
+        """Сохраняет событие в базу данных"""
         try:
-            # Проверяем, существует ли уже событие с таким ID
-            event = (
-                session.query(Event)
-                .filter(
-                    Event.event_id == event_data["event_id"], Event.user_id == user_id
-                )
-                .first()
-            )
-
-            if event:
+            session = self.db.get_session()
+            
+            # Получаем необходимые данные из события
+            event_id = event_data.get("id")
+            title = event_data.get("summary", "Без названия")
+            
+            # Преобразуем строки дат в объекты datetime
+            start_time_str = event_data["start"].get("dateTime", event_data["start"].get("date"))
+            end_time_str = event_data["end"].get("dateTime", event_data["end"].get("date"))
+            
+            # Используем метод safe_parse_datetime для преобразования строк в datetime
+            from services import BotService
+            start_time = BotService.safe_parse_datetime(start_time_str)
+            end_time = BotService.safe_parse_datetime(end_time_str)
+            
+            meet_link = event_data.get("hangoutLink", "")
+            
+            # Проверяем, существует ли уже такое событие
+            existing_event = session.query(Event).filter_by(event_id=event_id).first()
+            
+            if existing_event:
                 # Обновляем существующее событие
-                for key, value in event_data.items():
-                    if hasattr(event, key):
-                        setattr(event, key, value)
-                event.updated_at = datetime.utcnow()
+                existing_event.title = title
+                existing_event.start_time = start_time
+                existing_event.end_time = end_time
+                existing_event.meet_link = meet_link
+                existing_event.all_data = event_data
+                return "updated"
             else:
                 # Создаем новое событие
-                event = Event(user_id=user_id, **event_data)
-                session.add(event)
-
+                new_event = Event(
+                    event_id=event_id,
+                    title=title,
+                    start_time=start_time,
+                    end_time=end_time,
+                    meet_link=meet_link,
+                    user_id=user_id,
+                    all_data=event_data
+                )
+                session.add(new_event)
+            
             session.commit()
-            logger.info(f"Событие сохранено: {event_data['event_id']}")
-            return event
+            return "created"
         except Exception as e:
-            session.rollback()
-            logger.error(f"Ошибка при сохранении события: {e}")
-            return None
+            logging.error(f"Ошибка при сохранении события: {e}")
+            if session:
+                session.rollback()
+            return False
         finally:
-            session.close()
+            if session:
+                session.close()
 
     def get_user_events(
         self,
@@ -273,6 +294,16 @@ class NotificationQueries(Queries):
         """Создает новое уведомление"""
         session = self.db.get_session()
         try:
+            # Проверяем существует ли уже уведомление для этого события
+            existing = session.query(Notification).filter(
+                Notification.event_id == event_id,
+                Notification.user_id == user_id
+            ).first()
+            
+            if existing:
+                logger.info(f"Уведомление для события {event_id} уже существует")
+                return existing
+
             notification = Notification(event_id=event_id, user_id=user_id)
             session.add(notification)
             session.commit()
@@ -285,22 +316,40 @@ class NotificationQueries(Queries):
         finally:
             session.close()
 
-    def mark_notification_sent(self, notification_id: int) -> bool:
-        """Отмечает уведомление как отправленное"""
+    def get_notification(self, event_id: int, user_id: int) -> Any:
+        """Получает уведомление по событию и пользователю"""
         session = self.db.get_session()
         try:
-            notification = session.query(Notification).get(notification_id)
-            if notification:
-                notification.is_sent = True
-                notification.sent_at = datetime.utcnow()
-                session.commit()
-                logger.info(f"Уведомление отправлено: {notification}")
-                return True
-            logger.info(f"Уведомление не найдено: {notification_id}")
-            return False
+            notification = session.query(Notification).filter(
+                Notification.event_id == event_id,
+                Notification.user_id == user_id
+            ).first()
+            logger.info(f"Успешно получено уведомление: {notification}")
+            return notification
         except Exception as e:
-            session.rollback()
-            logger.error(f"Ошибка при обновлении уведомления: {e}")
+            logger.error(f"Ошибка при получении уведомления: {e}")
+            return None
+    
+    def check_all_notifications_sent(self, event_ids: tuple[int], user_id: int) -> bool:
+        """Проверяет, отправлены ли все уведомления для события"""
+        session = self.db.get_session()
+        try:
+            notifications = session.query(Notification).filter(
+                Notification.event_id.in_(event_ids),
+                Notification.user_id == user_id,
+                Notification.is_sent == True
+            ).all()
+            
+            if not notifications:
+                logger.info(f"Уведомления для событий {event_ids} не найдены")
+                return False
+                
+            all_sent = all(n.is_sent for n in notifications)
+            logger.info(f"Все уведомления отправлены: {all_sent}")
+            return all_sent
+            
+        except Exception as e:
+            logger.error(f"Ошибка при проверке уведомлений: {e}")
             return False
         finally:
             session.close()

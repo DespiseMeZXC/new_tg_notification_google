@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Boolean,
     ForeignKey,
+    JSON,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, scoped_session
@@ -69,10 +70,8 @@ class Event(Base):  # type: ignore
         String(100), unique=True, nullable=False
     )  # ID события в Google Calendar
     title = Column(String(200), nullable=False)
-    description = Column(String(1000), nullable=True)
     start_time = Column(DateTime, nullable=False)
     end_time = Column(DateTime, nullable=False)
-    location = Column(String(200), nullable=True)
     meet_link = Column(String(255), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -81,6 +80,7 @@ class Event(Base):  # type: ignore
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    all_data = Column(JSON, nullable=True)
 
     user = relationship("User", back_populates="events")  # type: ignore
 
@@ -94,7 +94,7 @@ class Notification(Base):  # type: ignore
     event_id = Column(Integer, ForeignKey("events.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     sent_at = Column(DateTime, nullable=True)
-    is_sent = Column(Boolean, default=False)
+    is_sent = Column(Boolean, default=True)
 
     event = relationship("Event")  # type: ignore
     user = relationship("User")  # type: ignore

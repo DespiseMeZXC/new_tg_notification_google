@@ -3,6 +3,9 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Tuple, Any, Optional
 
+from aiogram.types import Message
+from aiogram.utils.markdown import hbold
+
 from google_calendar_client import GoogleCalendarClient
 from queries import DatabaseQueries
 
@@ -44,7 +47,7 @@ class BotService:
 
     async def get_week_meetings(
         self, user_id: int
-    ) -> Tuple[bool, str, Dict[str, List[Dict[str, Any]]]]:
+    ) -> Tuple[bool, str, Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]]]:
         """Получает встречи на неделю и группирует их по дням"""
         try:
             # Проверяем наличие токена в базе данных
@@ -53,6 +56,7 @@ class BotService:
                     False,
                     "Вы не авторизованы в Google Calendar.\nИспользуйте команду /auth для авторизации.",
                     {},
+                    [],
                 )
 
             # Получаем текущее время в UTC для фильтрации только будущих встреч
@@ -79,7 +83,7 @@ class BotService:
                     active_events.append(event)
 
             if not active_events:
-                return True, "У вас нет предстоящих онлайн-встреч на неделю.", {}
+                return True, "У вас нет предстоящих онлайн-встреч на неделю.", {}, []
 
             # Группируем встречи по дням
             meetings_by_day: Dict[str, List[Dict[str, Any]]] = {}
@@ -93,11 +97,11 @@ class BotService:
 
                 meetings_by_day[day_key].append(event)
 
-            return True, "", meetings_by_day
+            return True, "", meetings_by_day, active_events
 
         except Exception as e:
             logging.error(f"Ошибка при получении встреч на неделю: {e}")
-            return False, "Произошла ошибка при получении данных о встречах.", {}
+            return False, "Произошла ошибка при получении данных о встречах.", {}, []
 
     @staticmethod
     def safe_parse_datetime(date_str: str) -> datetime:
@@ -113,3 +117,30 @@ class BotService:
         except Exception as e:
             logging.error(f"Ошибка при парсинге даты {date_str}: {e}")
             return datetime.now(timezone.utc)
+
+    async def send_meetings_by_day(self, message: Message, meetings_by_day: dict, is_check: bool = False) -> None:
+        """Отправляет сообщения со встречами, сгруппированными по дням"""
+        for day, day_events in sorted(meetings_by_day.items()):
+            day_message = f"📆 {hbold(f'Онлайн-встречи на {day}:')}\n\n"
+            has_meetings = False
+                
+            for event in day_events:
+                if is_check:
+                    notification = self.db.notifications.get_notification(event['id'], message.from_user.id)
+                    if notification:
+                        logging.info(f"Уведомление для события {event['id']} уже существует")
+                        continue
+                start_time = event["start"].get("dateTime", event["start"].get("date"))
+                start_dt = self.safe_parse_datetime(start_time)
+
+                day_message += (
+                    f"🕒 {start_dt.strftime('%H:%M')} - {hbold(event['summary'])}\n"
+                )
+                day_message += f"🔗 {event['hangoutLink']}\n\n"
+                has_meetings = True
+                if not is_check:
+                    self.db.notifications.create_notification(event['id'], message.from_user.id)
+
+            # Отправляем сообщение если есть встречи
+            if has_meetings:
+                await message.answer(day_message, parse_mode="HTML")
