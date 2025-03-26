@@ -82,20 +82,33 @@ class BotService:
     ) -> None:
         """Отправляет сообщение о обновленных событиях"""
         logger.info(f"Обновленные события: {updated_events}")
-        message = "Встречи были обновлены:"
+        # Группируем события по датам
+        events_by_date = {}
         for event in updated_events:
-            message += "\n🔄 Встреча обновлена:\n"
-            message += "Было:\n"
-            message += f"📝 {event['old_summary']}\n"
-            
-            # Преобразуем строки в datetime
-            old_start = self.safe_parse_datetime(event['old_start']) if isinstance(event['old_start'], str) else event['old_start']
-            old_end = self.safe_parse_datetime(event['old_end']) if isinstance(event['old_end'], str) else event['old_end']
-            
-            message += f"🕒 {old_start.strftime('%d.%m.%Y %H:%M')} - {old_end.strftime('%d.%m.%Y %H:%M')}\n"
-            message += "Стало:\n" 
-            message += f"📝 {event['summary']}\n"
-            message += f"🕒 {event['start'].strftime('%d.%m.%Y %H:%M')} - {event['end'].strftime('%d.%m.%Y %H:%M')}\n"
+            start_dt = event['start']
+            day_key = start_dt.strftime("%d.%m.%Y")
+            if day_key not in events_by_date:
+                events_by_date[day_key] = []
+            events_by_date[day_key].append(event)
+
+        message = "" 
+        # Формируем сообщение по датам
+        for date in sorted(events_by_date.keys()):
+            message += f"\n🔄 Встречи обновлена на дату: {date}\n"
+            for event in events_by_date[date]:
+                message += "Было:\n"
+                message += f"📝 Название: {event['old_summary']}\n"
+                
+                # Преобразуем строки в datetime
+                old_start = self.safe_parse_datetime(event['old_start']) if isinstance(event['old_start'], str) else event['old_start']
+                old_end = self.safe_parse_datetime(event['old_end']) if isinstance(event['old_end'], str) else event['old_end']
+                
+                message += f"🕒 Время: {old_start.strftime('%H:%M')} - {old_end.strftime('%H:%M')}\n"
+                message += "Стало:\n" 
+                message += f"📝 Название: {event['summary']}\n"
+                message += f"🕒 Время: {event['start'].strftime('%H:%M')} - {event['end'].strftime('%H:%M')}\n"
+                message += f"🔗 Ссылка на встречу: {event['old_meet_link']}\n"
+
         await self.bot.send_message(user_id, message)
     
     async def get_week_meetings(
