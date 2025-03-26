@@ -135,6 +135,7 @@ class GoogleCalendarClient:
         time_min: datetime,
         time_max: datetime,
         limit: int = 10,
+        timezone_str: str = "UTC"
     ) -> List[Dict[str, Any]]:
         """Получение предстоящих событий из Google Calendar."""
         loop = asyncio.get_event_loop()
@@ -185,6 +186,7 @@ class GoogleCalendarClient:
                     maxResults=limit,
                     singleEvents=True,
                     orderBy="startTime",
+                    timeZone=timezone_str
                 )
                 .execute(),
             )

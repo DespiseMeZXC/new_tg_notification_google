@@ -1,7 +1,7 @@
 import abc
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from database import Database, User, Token, Event, Notification
@@ -226,17 +226,124 @@ class EventQueries(Queries):
         session = self.db.get_session()
         deleted_events = []
         try:
-            all_events_db = session.query(Event).filter(Event.user_id == user_id, Event.start_time >= time_min, Event.start_time <= time_max).all()
+            # Получаем все события из БД за указанный период
+            all_events_db = session.query(Event).filter(
+                Event.user_id == user_id,
+                Event.start_time >= time_min,
+                Event.start_time <= time_max
+            ).all()
+            current_time = datetime.now(timezone.utc)
+
             for event in all_events_db:
+                # Пропускаем уже завершившиеся события
+                # Добавляем часовой пояс к event.end_time, если его нет
+                event_end_time = event.end_time
+                if event_end_time.tzinfo is None:
+                    event_end_time = event_end_time.replace(tzinfo=timezone.utc)
+                
+                # Всегда сравниваем в UTC
+                if event_end_time <= current_time:
+                    continue
+                    
+                # Проверяем было ли событие удалено из активных
                 if event.event_id not in [event["id"] for event in active_events]:
-                    deleted_events.append({"id": event.event_id, "summary": event.title, "start": event.start_time, "end": event.end_time})
+                    deleted_events.append({
+                        "id": event.event_id,
+                        "summary": event.title,
+                        "start": event.start_time,
+                        "end": event.end_time
+                    })
                     session.delete(event)
                     session.query(Notification).filter(Notification.event_id == event.event_id).delete()
             session.commit()
         except Exception as e:
             logger.error(f"Ошибка при проверке удаленных событий: {e}")
         return deleted_events
-
+    
+    def check_updated_event(self, user_id: int, active_events: list[dict]) -> list:
+        """Получает обновленные события"""
+        session = self.db.get_session()
+        try:
+            updated_events = []
+            
+            for event in active_events:
+                logger.info(f"event: {event['summary']}")
+                event_db = session.query(Event).filter_by(event_id=event["id"]).first()
+                logger.info(f"event_db: {event_db.title}")
+                if event_db:
+                    # Получаем строки дат из события
+                    start_time_str = event.get("start", {}).get("dateTime", event.get("start", {}).get("date"))
+                    end_time_str = event.get("end", {}).get("dateTime", event.get("end", {}).get("date"))
+                    
+                    # Преобразуем строки в datetime
+                    start_time = self.safe_parse_datetime(start_time_str)
+                    end_time = self.safe_parse_datetime(end_time_str)
+                    
+                    # Добавляем часовой пояс к event_db.start_time и event_db.end_time, если его нет
+                    db_start_time = event_db.start_time
+                    db_end_time = event_db.end_time
+                    
+                    if db_start_time.tzinfo is None:
+                        db_start_time = db_start_time.replace(tzinfo=timezone.utc)
+                    if db_end_time.tzinfo is None:
+                        db_end_time = db_end_time.replace(tzinfo=timezone.utc)
+                    
+                    # Проверяем, изменились ли данные
+                    if (event_db.title != event["summary"] or 
+                        event_db.meet_link != event.get("hangoutLink", "") or
+                        abs((db_start_time - start_time).total_seconds()) > 60 or
+                        abs((db_end_time - end_time).total_seconds()) > 60):
+                        
+                        old_title = event_db.title
+                        old_start = db_start_time
+                        old_end = db_end_time
+                        old_meet_link = event_db.meet_link
+                        
+                        # Обновляем данные события
+                        event_db.title = event["summary"]
+                        event_db.start_time = start_time
+                        event_db.end_time = end_time
+                        event_db.meet_link = event.get("hangoutLink", "")
+                        event_db.all_data = event
+                        
+                        # Добавляем в список обновленных событий
+                        updated_events.append({
+                            "id": event_db.event_id,
+                            "summary": event_db.title,
+                            "old_summary": old_title,
+                            "start": start_time,
+                            "old_start": old_start,
+                            "end": end_time,
+                            "old_end": old_end,
+                            "old_meet_link": old_meet_link
+                        })
+            
+            session.commit()
+            logger.info(f"Обновленные события: {updated_events}")
+            return updated_events
+        except Exception as e:
+            logger.error(f"Ошибка при получении обновленных событий: {e}")
+            session.rollback()
+            return []
+        finally:
+            session.close()
+    
+    def safe_parse_datetime(self, date_str: str) -> datetime:
+        """Безопасно парсит строку даты в объект datetime"""
+        try:
+            if date_str.endswith("Z"):
+                return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            elif "+" in date_str or "-" in date_str and "T" in date_str:
+                # Преобразуем к UTC
+                dt = datetime.fromisoformat(date_str)
+                return dt.astimezone(timezone.utc)
+            else:
+                # Если дата без часового пояса, добавляем UTC
+                return datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)
+        except Exception as e:
+            logger.error(f"Ошибка при парсинге даты {date_str}: {e}")
+            return datetime.now(timezone.utc)
+            
     def save_event(self, user_id: int, event_data: dict) -> str:
         """Сохраняет событие в базу данных"""
         try:
@@ -254,11 +361,9 @@ class EventQueries(Queries):
                 "dateTime", event_data["end"].get("date")
             )
 
-            # Используем метод safe_parse_datetime для преобразования строк в datetime
-            from services import BotService
-
-            start_time = BotService.safe_parse_datetime(start_time_str)
-            end_time = BotService.safe_parse_datetime(end_time_str)
+            # Используем локальный метод для парсинга дат
+            start_time = self.safe_parse_datetime(start_time_str)
+            end_time = self.safe_parse_datetime(end_time_str)
 
             meet_link = event_data.get("hangoutLink", "")
 

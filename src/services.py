@@ -10,6 +10,8 @@ from aiogram import Bot
 from google_calendar_client import GoogleCalendarClient
 from queries import DatabaseQueries
 
+# Добавляем инициализацию логгера
+logger = logging.getLogger(__name__)
 
 class BotService:
     def __init__(
@@ -53,17 +55,52 @@ class BotService:
         self, user_id: int, deleted_events: List[Dict[str, Any]]
     ) -> None:
         """Отправляет сообщение о удаленных событиях"""
-        message = "Встречи были отменены:\n"
-        message += "\n".join([
-            f"🗑️ {event['summary']}\n"
-            f"🕒 {event['start'].strftime('%d.%m.%Y %H:%M')} - {event['end'].strftime('%d.%m.%Y %H:%M')}" 
-            for event in deleted_events
-        ])
+        # Группируем события по датам
+        events_by_date = {}
+        for event in deleted_events:
+            start_dt = event['start']
+            day_key = start_dt.strftime("%d.%m.%Y")
+            if day_key not in events_by_date:
+                events_by_date[day_key] = []
+            events_by_date[day_key].append(event)
+
+        message = "Встречи были отменены:"
+        
+        # Формируем сообщение по датам
+        for date in sorted(events_by_date.keys()):
+            message += f"\n📅 Онлайн встречи на {date}:\n"
+            for event in events_by_date[date]:
+                message += (
+                    f"🗑️ Название: {event['summary']}\n"
+                    f"🕒 Время: {event['start'].strftime('%H:%M')} - {event['end'].strftime('%H:%M')}\n"
+                )
+
         await self.bot.send_message(user_id, message)
 
+    async def send_updated_events(
+        self, user_id: int, updated_events: List[Dict[str, Any]]
+    ) -> None:
+        """Отправляет сообщение о обновленных событиях"""
+        logger.info(f"Обновленные события: {updated_events}")
+        message = "Встречи были обновлены:"
+        for event in updated_events:
+            message += "\n🔄 Встреча обновлена:\n"
+            message += "Было:\n"
+            message += f"📝 {event['old_summary']}\n"
+            
+            # Преобразуем строки в datetime
+            old_start = self.safe_parse_datetime(event['old_start']) if isinstance(event['old_start'], str) else event['old_start']
+            old_end = self.safe_parse_datetime(event['old_end']) if isinstance(event['old_end'], str) else event['old_end']
+            
+            message += f"🕒 {old_start.strftime('%d.%m.%Y %H:%M')} - {old_end.strftime('%d.%m.%Y %H:%M')}\n"
+            message += "Стало:\n" 
+            message += f"📝 {event['summary']}\n"
+            message += f"🕒 {event['start'].strftime('%d.%m.%Y %H:%M')} - {event['end'].strftime('%d.%m.%Y %H:%M')}\n"
+        await self.bot.send_message(user_id, message)
+    
     async def get_week_meetings(
         self, user_id: int
-    ) -> Tuple[bool, str, Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ) -> Tuple[bool, str, Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Получает встречи на неделю и группирует их по дням"""
         try:
             # Проверяем наличие токена в базе данных
@@ -72,6 +109,7 @@ class BotService:
                     False,
                     "Вы не авторизованы в Google Calendar.\nИспользуйте команду /auth для авторизации.",
                     {},
+                    [],
                     [],
                     [],
                 )
@@ -113,8 +151,10 @@ class BotService:
                     active_events.append(event)
 
             if not active_events:
-                return True, "У вас нет предстоящих онлайн-встреч на неделю.", {}, [], []
+                return True, "У вас нет предстоящих онлайн-встреч на неделю.", {}, [], [], []
             deleted_events = self.db.events.check_deleted_events(user_id, active_events, now, time_max)
+            updated_events = self.db.events.check_updated_event(user_id, active_events)
+            print(f"updated_events: {updated_events}")
             # Группируем встречи по дням
             meetings_by_day: Dict[str, List[Dict[str, Any]]] = {}
             for event in active_events:
@@ -127,11 +167,11 @@ class BotService:
 
                 meetings_by_day[day_key].append(event)
 
-            return True, "", meetings_by_day, active_events, deleted_events
+            return True, "", meetings_by_day, active_events, deleted_events, updated_events
 
         except Exception as e:
             logging.error(f"Ошибка при получении встреч на неделю: {e}")
-            return False, "Произошла ошибка при получении данных о встречах.", {}, [], []
+            return False, "Произошла ошибка при получении данных о встречах.", {}, [], [], []
 
     @staticmethod
     def safe_parse_datetime(date_str: str) -> datetime:
@@ -140,7 +180,9 @@ class BotService:
             if date_str.endswith("Z"):
                 return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
             elif "+" in date_str or "-" in date_str and "T" in date_str:
-                return datetime.fromisoformat(date_str)
+                # Преобразуем к UTC
+                dt = datetime.fromisoformat(date_str)
+                return dt.astimezone(timezone.utc)
             else:
                 # Если дата без часового пояса, добавляем UTC
                 return datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)

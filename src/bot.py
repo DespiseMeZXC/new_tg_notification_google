@@ -22,6 +22,7 @@ load_dotenv()
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Инициализация бота и диспетчера
@@ -40,10 +41,12 @@ async def schedule_meetings_check():
             # Получаем всех пользователей из базы
             users = db.tokens.get_all_users()
             for user in users:
-                success, error_message, meetings_by_day, active_events, deleted_events = (
+                success, error_message, meetings_by_day, active_events, deleted_events, updated_events = (
                     await bot_service.get_week_meetings(user)  # type: ignore
                 )
                 event_ids = tuple(event["id"] for event in active_events)
+                if updated_events:
+                    await bot_service.send_updated_events(user, updated_events)
                 if deleted_events:
                     await bot_service.send_deleted_events(user, deleted_events)
                 if db.notifications.check_all_notifications_sent(event_ids, user):  # type: ignore
@@ -54,8 +57,9 @@ async def schedule_meetings_check():
                 if not success:
                     await bot.send_message(user, error_message)
         except Exception as e:
-            logging.error(f"Ошибка при отправке спам-сообщения: {e}")
-        await asyncio.sleep(int(os.getenv("CHECK_INTERVAL", 300)))
+            logging.error(f"Ошибка при выполнении проверки встреч: {e}")
+        await asyncio.sleep(10)
+        # await asyncio.sleep(int(os.getenv("CHECK_INTERVAL", 300)))
 
 
 # Добавляем обработчик сигналов для корректного завершения
@@ -86,7 +90,7 @@ async def command_start(message: Message) -> None:
         "Я буду отправлять уведомления о предстоящих созвонах в Google Meet.\n\n"
         "Для начала работы вам нужно авторизоваться в Google Calendar.\n"
         "Выберите подходящий способ авторизации:\n\n"
-        "1. Через браузер с кодом авторизации: /auth\n"
+        "1. Через браузер с кодом авторизации: /auth (Рекомендуется)\n"
         "2. Ручной ввод токена (для продвинутых пользователей): /manualtoken"
     )
 
@@ -121,7 +125,8 @@ async def server_auth_command(message: Message) -> None:
         "❗ Если возникает ошибка при авторизации:\n"
         "- Убедитесь, что вы используете личный аккаунт Google (не корпоративный)\n"
         "- Попробуйте открыть ссылку в режиме инкогнито\n"
-        "- Или используйте команду /manualtoken",
+        "- Или используйте команду /manualtoken\n"
+        "Если ничего не помогает, обратитесь к разработчику @ImTaske",
         parse_mode="HTML",
         reply_markup=ForceReply(
             selective=True, input_field_placeholder="Вставьте код авторизации"
@@ -184,16 +189,27 @@ async def server_auth_command(message: Message) -> None:
 
 @dp.message(Command("check"))
 async def check_command(message: Message) -> None:
+    if not db.tokens.get_token(message.from_user.id):
+        await message.answer(
+            "Вы не авторизованы в Google Calendar.\nИспользуйте команду /auth для авторизации."
+        )
+        return
     message_check = await message.answer(
         "🔍 Проверяю на наличие новых встреч...\nПожалуйста, подождите."
     )
-    success, error_message, meetings_by_day, active_events, deleted_events = (
+    success, error_message, meetings_by_day, active_events, deleted_events, updated_events = (
         await bot_service.get_week_meetings(message.from_user.id)  # type: ignore
     )
     
     event_ids = tuple(event["id"] for event in active_events)
     if deleted_events:
         await bot_service.send_deleted_events(message.from_user.id, deleted_events)
+        await message_check.edit_text("Обнаружены удаленные встречи.")
+        return
+    if updated_events:
+        await bot_service.send_updated_events(message.from_user.id, updated_events)
+        await message_check.edit_text("Обнаружены обновленные встречи.")
+        return
     if db.notifications.check_all_notifications_sent(event_ids, message.from_user.id):  # type: ignore
         await message_check.edit_text("Новых встреч не обнаружено.")
         return
@@ -256,7 +272,7 @@ async def check_week_meetings(message: Message) -> None:
     user_id = message.from_user.id
     await message.answer("Проверяю ваши онлайн-встречи на неделю...")
 
-    success, error_message, meetings_by_day, active_events, deleted_events = (
+    success, error_message, meetings_by_day, active_events, deleted_events, updated_events = (
         await bot_service.get_week_meetings(user_id)
     )
 
