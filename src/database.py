@@ -99,6 +99,22 @@ class Notification(Base):  # type: ignore
     event = relationship("Event")  # type: ignore
     user = relationship("User")  # type: ignore
 
+class Feedback(Base):  # type: ignore
+    """Модель обратной связи"""
+
+    __tablename__ = "feedback"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    content = Column(String(2048), nullable=True)
+    message_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    rating = Column(Integer, nullable=True)
 
 # Определение отношений
 User.tokens = relationship("Token", back_populates="user", cascade="all, delete-orphan")

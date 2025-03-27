@@ -3,17 +3,19 @@ import asyncio
 import logging
 import signal
 import sys
+import json
 from pathlib import Path
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, ForceReply
+from aiogram.types import Message, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from aiogram.utils.markdown import hbold
 from dotenv import load_dotenv
 
 from google_calendar_client import GoogleCalendarClient
 from queries import DatabaseQueries
 from services import BotService
+from inline_buttons import StatisticsCallbackFactory, FeedbackCallbackFactory
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -91,7 +93,9 @@ async def command_start(message: Message) -> None:
         "Для начала работы вам нужно авторизоваться в Google Calendar.\n"
         "Выберите подходящий способ авторизации:\n\n"
         "1. Через браузер с кодом авторизации: /auth (Рекомендуется)\n"
-        "2. Ручной ввод токена (для продвинутых пользователей): /manualtoken"
+        "2. Ручной ввод токена (для продвинутых пользователей): /manualtoken\n"
+        "Если вы ещё не получали доступ к боту или у вас возникли проблемы, или предложения, напишите разработчику @ImTaske\n"
+        "Обратную связь можно оставить с помощью команды /feedback"
     )
 
     logging.info(
@@ -134,58 +138,113 @@ async def server_auth_command(message: Message) -> None:
     )
     db.tokens.set_auth_message_id(message.from_user.id, str(auth_message.message_id))
 
-    # Добавляем обработчик для получения кода авторизации
-    @dp.message()
-    async def handle_auth_code(code_message: Message) -> None:
-        auth_message_id = db.tokens.get_auth_message_id(code_message.from_user.id)  # type: ignore
 
-        if (
-            not code_message.reply_to_message
-            or code_message.reply_to_message.message_id
-            != int(auth_message_id)  # type: ignore
-            or not code_message.from_user
-            or code_message.from_user.id != code_message.from_user.id
-        ):
-            logging.info("Условия не совпадают, пропускаем обработку")
-            return
+# Обработчик для кода авторизации - используем фильтр F.reply_to_message
+@dp.message(F.reply_to_message)
+async def handle_reply(message: Message) -> None:
+    """Обрабатывает все ответы на сообщения"""
+    user_id = message.from_user.id
+    
+    # Проверяем, является ли это ответом на сообщение авторизации
+    auth_message_id = db.tokens.get_auth_message_id(user_id)
+    if auth_message_id and int(message.reply_to_message.message_id) == int(auth_message_id):
+        await handle_auth_code_logic(message)
+        return
+        
+    # Проверяем, является ли это ответом на сообщение обратной связи
+    feedback_message_id = db.feedback.get_feedback_message_id(user_id)
+    if feedback_message_id and int(message.reply_to_message.message_id) == int(feedback_message_id):
+        await handle_feedback_logic(message)
+        return
 
-        code = code_message.text.strip()  # type: ignore
-        if not code:
+
+async def handle_auth_code_logic(code_message: Message) -> None:
+    """Логика обработки кода авторизации"""
+    code = code_message.text.strip()
+    if not code:
+        await code_message.answer("❌ Пожалуйста, отправьте корректный код авторизации")
+        return
+
+    # Отправляем сообщение о начале обработки
+    processing_msg = await code_message.answer("🔄 Обрабатываю код авторизации...")
+
+    try:
+        # Обрабатываем полученный код авторизации
+        success, message_text = await calendar_client.process_auth_code(
+            code_message.from_user.id,
+            code,
+            {
+                "id": code_message.from_user.id,
+                "username": code_message.from_user.username,
+                "full_name": code_message.from_user.full_name,
+                "is_bot": code_message.from_user.is_bot,
+                "language_code": code_message.from_user.language_code,
+            },
+        )
+
+        await processing_msg.edit_text(message_text)
+
+        if not success:
             await code_message.answer(
-                "❌ Пожалуйста, отправьте корректный код авторизации"
-            )
-            return
-
-        # Отправляем сообщение о начале обработки
-        processing_msg = await code_message.answer("🔄 Обрабатываю код авторизации...")
-
-        try:
-            # Обрабатываем полученный код авторизации
-            success, message_text = await calendar_client.process_auth_code(
-                code_message.from_user.id,
-                code,
-                {
-                    "id": code_message.from_user.id,
-                    "username": code_message.from_user.username,
-                    "full_name": code_message.from_user.full_name,
-                    "is_bot": code_message.from_user.is_bot,
-                    "language_code": code_message.from_user.language_code,
-                },
+                "Попробуйте еще раз или используйте /manualtoken для ручного ввода токена"
             )
 
-            await processing_msg.edit_text(message_text)
+    except Exception as e:
+        await processing_msg.edit_text(
+            "❌ Произошла ошибка при обработке кода.\n"
+            "Попробуйте еще раз или используйте /manualtoken"
+        )
 
-            if not success:
-                await code_message.answer(
-                    "Попробуйте еще раз или используйте /manualtoken для ручного ввода токена"
-                )
 
-        except Exception as e:
-            await processing_msg.edit_text(
-                "❌ Произошла ошибка при обработке кода.\n"
-                "Попробуйте еще раз или используйте /manualtoken"
-            )
+async def handle_feedback_logic(feedback_msg: Message) -> None:
+    """Логика обработки обратной связи"""
+    # Обрабатываем обратную связь
+    db.feedback.set_content_feedback(
+        feedback_msg.from_user.id, 
+        feedback_msg.reply_to_message.message_id, 
+        feedback_msg.text
+    )
+    
+    logger.info(f"Получен отзыв от пользователя {feedback_msg.from_user.id}: {feedback_msg.text}")
+    
+    await feedback_msg.answer(
+        "✅ Спасибо за ваш отзыв! Мы обязательно его рассмотрим.\n"
+        "Если у вас возникнут дополнительные вопросы, "
+        "вы всегда можете связаться с разработчиком: @ImTaske\n\n"
+        "Пожалуйста, оцените работу бота:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=
+            FeedbackCallbackFactory(feedback_msg.reply_to_message.message_id).get_feedback_buttons()
+        )
+    )
 
+@dp.message(Command("statistics"))
+async def statistics_command(message: Message) -> None:
+    # Создаем инлайн клавиатуру
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=StatisticsCallbackFactory().get_buttons()
+    )
+    
+    await message.answer(
+        "📊 Выберите период для просмотра статистики:",
+        reply_markup=keyboard
+    )
+
+@dp.callback_query(lambda c: json.loads(c.data).get("t") == "statistics")
+async def process_statistics_callback(callback_query: CallbackQuery) -> None:
+    """Обрабатывает нажатие кнопок статистики
+    t - тип callback
+    d - период
+    """
+    data = json.loads(callback_query.data)
+    period = data.get("d")
+    logger.info(f"Получен период: {period}")
+    user_id = callback_query.from_user.id
+    
+    await callback_query.answer()
+    statistics = bot_service.get_statistics(user_id, period)
+    await callback_query.message.edit_text(
+        f"📊 Статистика за {period}:\n{statistics}"
+    )
 
 @dp.message(Command("check"))
 async def check_command(message: Message) -> None:
@@ -215,7 +274,7 @@ async def check_command(message: Message) -> None:
         return
     for i in range(len(active_events)):
         status = db.events.save_event(message.from_user.id, active_events[i])  # type: ignore
-    await bot_service.send_meetings_check_by_day(message.from_user.id, meetings_by_day)  # type: ignore
+    await bot_service.send_meetings_check_by_day(message.from_user.id, meetings_by_day)
     if not success:
         await message.answer(error_message)
         return
@@ -293,13 +352,44 @@ async def reset_processed_events(message: Message) -> None:
     try:
         # Сбрасываем все данные в базе
         await message.answer(
-            "✅ MOCK: Все данные успешно сброшены. Теперь вы получите уведомления о всех текущих встречах как о новых."
+            "Все данные успешно сброшены. Теперь вы получите уведомления о всех текущих встречах как о новых."
         )
+        db.notifications.reset_notifications(message.from_user.id)
+        db.events.reset_processed_events(message.from_user.id)
     except Exception as e:
         logging.error(f"MOCK:Ошибка при сбросе данных: {e}")
         await message.answer("❌ MOCK: Произошла ошибка при сбросе данных.")
 
+@dp.message(Command("feedback"))
+async def feedback_command(message: Message) -> None:
+    feedback_message = await message.answer(
+        "📝 Пожалуйста, напишите ваш отзыв или предложение в ответ на это сообщение.\n"
+        "Ваше мнение очень важно для нас и поможет сделать бота лучше!",
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder="Введите ваш отзыв или предложение здесь"
+        )
+    )
+    db.feedback.create_feedback_message_id(message.from_user.id, feedback_message.message_id)
 
+@dp.callback_query(lambda c: json.loads(c.data).get("t") == "f")
+async def process_rating_callback(callback_query: CallbackQuery) -> None:
+    """Обрабатывает нажатие кнопок рейтинга
+    t - тип callback
+    d - рейтинг
+    m - id сообщения
+    """
+    data = json.loads(callback_query.data)
+    rating = data.get("d")
+    logger.info(f"Получен рейтинг: {rating}")
+    user_id = callback_query.from_user.id
+    message_id = data.get("m")
+    await callback_query.answer()
+    db.feedback.set_rating(user_id, rating, message_id)
+    await callback_query.message.edit_text(
+        f"📊 Спасибо за ваш рейтинг! Мы обязательно его рассмотрим.\n"
+    )
+    
 # Запуск бота
 async def main() -> None:
     # Регистрируем обработчики сигналов
@@ -309,7 +399,7 @@ async def main() -> None:
         )
 
     # Запускаем спам-сообщения
-    asyncio.create_task(schedule_meetings_check())
+    # asyncio.create_task(schedule_meetings_check())
 
     # Запускаем бота
     await dp.start_polling(bot)

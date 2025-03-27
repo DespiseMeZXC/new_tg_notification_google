@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
-from database import Database, User, Token, Event, Notification
+from database import Database, User, Token, Event, Notification, Feedback
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +13,60 @@ class Queries(abc.ABC):
     def __init__(self, db: Database):
         self.db = db
 
+class FeedbackQueries(Queries):
+    
+    def set_rating(self, user_id: int, rating: int, message_id: int) -> None:
+        """Устанавливает рейтинг"""
+        session = self.db.get_session()
+        try:
+            feedback = session.query(Feedback).filter(Feedback.user_id == user_id, Feedback.message_id == message_id).first()
+            feedback.rating = rating
+            session.commit()
+        except Exception as e:
+            logger.error(f"Ошибка при установке рейтинга: {e}")
+            session.rollback()
+        finally:
+            session.close()
+        
+    def get_feedback_message_id(self, user_id: int) -> int | None:
+        """Получает ID сообщения обратной связи"""
+        session = self.db.get_session()
+        try:
+            feedback = session.query(Feedback).filter(Feedback.user_id == user_id).order_by(Feedback.created_at.desc()).first()
+            logger.info(f"feedback: {feedback.message_id}")
+            return feedback.message_id if feedback else None
+        except Exception as e:
+            logger.error(f"Ошибка при получении ID сообщения обратной связи: {e}")
+            return None
+        finally:
+            session.close()
+    
+    def create_feedback_message_id(self, user_id: int, message_id: int) -> None:
+        """Устанавливает ID сообщения обратной связи"""
+        session = self.db.get_session()
+        try:
+            feedback = Feedback(user_id=user_id, message_id=message_id)
+            session.add(feedback)
+        except Exception as e:
+            logger.error(f"Ошибка при создании обратной связи: {e}")
+            session.rollback()
+            return None
+        feedback.message_id = message_id
+        session.commit()
+        session.close()
+        
+    def set_content_feedback(self, user_id: int, message_id: int, content: str) -> None:
+        """Сохраняет обратную связь"""
+        session = self.db.get_session()
+        try:
+            feedback = session.query(Feedback).filter(Feedback.user_id == user_id, Feedback.message_id == message_id).first()
+            feedback.content = content
+        except Exception as e:
+            logger.error(f"Ошибка при создании обратной связи: {e}")
+            session.rollback()
+            return None
+        session.commit()
+        session.close()
 
 class UserQueries(Queries):
 
@@ -221,6 +275,52 @@ class TokenQueries(Queries):
 
 class EventQueries(Queries):
     
+    def reset_processed_events(self, user_id: int) -> None:
+        """Сбрасывает все данные в базе"""
+        session = self.db.get_session()
+        try:
+            session.query(Event).filter(Event.user_id == user_id).delete()
+            session.commit()
+        except Exception as e:
+            logger.error(f"Ошибка при сбросе данных: {e}")
+        finally:
+            session.close()
+
+    def get_statistics(self, user_id: int, period: str) -> str:
+        """Получает статистику по встречам"""
+        session = self.db.get_session()
+        try:
+            # Получаем текущую дату
+            now = datetime.now(timezone.utc)
+            
+            # Устанавливаем начало и конец периода в зависимости от выбранного периода
+            if period == "week":
+                # Получаем начало текущей недели (понедельник)
+                start_date = now - timedelta(days=now.weekday())
+                start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = now
+            elif period == "month":
+                # Получаем первый день текущего месяца
+                start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                end_date = now
+            else:  # year
+                # Получаем первый день текущего года
+                start_date = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+                end_date = now
+
+            end_date = end_date.replace(hour=23, minute=59, second=59)
+
+            # Получаем все события за выбранный период
+            events = session.query(Event).filter(
+                Event.user_id == user_id,
+                Event.start_time >= start_date,
+                Event.start_time <= end_date
+            ).all()     
+            return events
+        except Exception as e:
+            logger.error(f"Ошибка при получении статистики: {e}")
+            return []
+        
     def check_deleted_events(self, user_id: int, active_events: list[dict], time_min: datetime, time_max: datetime) -> None:
         """Проверяет, было ли удалено какое либо событие из календаря за указанный период"""
         session = self.db.get_session()
@@ -344,7 +444,7 @@ class EventQueries(Queries):
             logger.error(f"Ошибка при парсинге даты {date_str}: {e}")
             return datetime.now(timezone.utc)
             
-    def save_event(self, user_id: int, event_data: dict) -> str:
+    def save_event(self, user_id: int, event_data: dict) -> None:
         """Сохраняет событие в базу данных"""
         try:
             session = self.db.get_session()
@@ -369,18 +469,7 @@ class EventQueries(Queries):
 
             # Проверяем, существует ли уже такое событие
             existing_event = session.query(Event).filter_by(event_id=event_id).first()
-
-            if existing_event:
-                # Обновляем существующее событие
-                existing_event.title = title
-                existing_event.start_time = start_time
-                existing_event.end_time = end_time
-                existing_event.meet_link = meet_link
-                existing_event.all_data = event_data
-                logger.info(f"Событие {event_id} обновлено")
-                return "updated"
-            else:
-                # Создаем новое событие
+            if not existing_event:
                 new_event = Event(
                     event_id=event_id,
                     title=title,
@@ -394,12 +483,10 @@ class EventQueries(Queries):
                 session.add(new_event)
 
             session.commit()
-            return "created"
         except Exception as e:
             logging.error(f"Ошибка при сохранении события: {e}")
             if session:
                 session.rollback()
-            return "error"
         finally:
             if session:
                 session.close()
@@ -431,7 +518,14 @@ class EventQueries(Queries):
 
 
 class NotificationQueries(Queries):
-    
+    def reset_notifications(self, user_id: int) -> None:
+        """Сбрасывает все данные в базе"""
+        session = self.db.get_session()
+        try:
+            session.query(Notification).filter(Notification.user_id == user_id).delete()
+            session.commit()
+        except Exception as e:
+            logger.error(f"Ошибка при сбросе данных: {e}")
     # Методы для работы с уведомлениями
     def create_notification(self, event_id: int, user_id: int) -> Notification | None:
         """Создает новое уведомление"""
@@ -538,3 +632,4 @@ class DatabaseQueries:
         self.tokens = TokenQueries(self.db)
         self.events = EventQueries(self.db)
         self.notifications = NotificationQueries(self.db)
+        self.feedback = FeedbackQueries(self.db)

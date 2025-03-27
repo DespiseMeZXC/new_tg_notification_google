@@ -51,6 +51,33 @@ class BotService:
             logging.error(f"Ошибка при валидации токена: {e}")
             return False, f"❌ Произошла ошибка: {str(e)}", None
 
+    def get_statistics(self, user_id: int, period: str) -> str:
+        """Получает статистику по встречам"""
+        if not period:
+            return "Ошибка: не указан период"
+        
+        events = self.db.events.get_statistics(user_id, period)
+        # Считаем общее количество событий
+        total_events = len(events)
+
+        # Считаем общее время в минутах
+        total_minutes = sum(
+            (event.end_time - event.start_time).total_seconds() / 60
+            for event in events
+        )
+
+        now = datetime.now(timezone.utc) - timedelta(days=datetime.now(timezone.utc).weekday())
+        period_text = {
+            "week": f"неделю {now.strftime('%d.%m')} - {datetime.now(timezone.utc).strftime('%d.%m')}",
+            "month": f"{now.strftime('%B').replace('March', 'Март').replace('April', 'Апрель').replace('May', 'Май').replace('June', 'Июнь').replace('July', 'Июль').replace('August', 'Август').replace('September', 'Сентябрь').replace('October', 'Октябрь').replace('November', 'Ноябрь').replace('December', 'Декабрь').replace('January', 'Январь').replace('February', 'Февраль')} {now.strftime('%Y')} года",
+            "year": f"{now.strftime('%Y')} год"
+        }.get(period, f"{period}")
+
+        statistics = f"За {period_text}:\n" \
+                    f"Количество встреч: {total_events}\n" \
+                    f"Общее время: {int(total_minutes // 60)} ч {int(total_minutes % 60)} мин"
+        return statistics
+    
     async def send_deleted_events(
         self, user_id: int, deleted_events: List[Dict[str, Any]]
     ) -> None:
@@ -157,7 +184,8 @@ class BotService:
                 # Пропускаем события без ссылки на подключение
                 if "hangoutLink" not in event:
                     continue
-
+                logger.info(f"event: {event.get('start')}")
+                logger.info(f"event: {event.get('end')}")
                 end_time = event["end"].get("dateTime", event["end"].get("date"))
                 end_dt = self.safe_parse_datetime(end_time)
                 if end_dt > now:
@@ -261,6 +289,7 @@ class BotService:
                     f"🕒 {hbold('Время:')} {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}\n"
                     f"🔗 {hbold('Ссылка:')} {event['hangoutLink']}\n\n"
                 )
+                self.db.events.save_event(user_id, event)
                 self.db.notifications.create_notification(
                     event["id"], user_id  # type: ignore
                 )
