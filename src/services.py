@@ -1,5 +1,6 @@
 import logging
 import json
+import pytz
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Tuple, Any, Optional
 
@@ -9,6 +10,7 @@ from aiogram import Bot
 
 from google_calendar_client import GoogleCalendarClient
 from queries import DatabaseQueries
+from utils import safe_parse_datetime
 
 # Добавляем инициализацию логгера
 logger = logging.getLogger(__name__)
@@ -108,7 +110,6 @@ class BotService:
         self, user_id: int, updated_events: List[Dict[str, Any]]
     ) -> None:
         """Отправляет сообщение о обновленных событиях"""
-        logger.info(f"Обновленные события: {updated_events}")
         # Группируем события по датам
         events_by_date = {}
         for event in updated_events:
@@ -127,8 +128,8 @@ class BotService:
                 message += f"📝 Название: {event['old_summary']}\n"
                 
                 # Преобразуем строки в datetime
-                old_start = self.safe_parse_datetime(event['old_start']) if isinstance(event['old_start'], str) else event['old_start']
-                old_end = self.safe_parse_datetime(event['old_end']) if isinstance(event['old_end'], str) else event['old_end']
+                old_start = safe_parse_datetime(event['old_start']) if isinstance(event['old_start'], str) else event['old_start']
+                old_end = safe_parse_datetime(event['old_end']) if isinstance(event['old_end'], str) else event['old_end']
                 
                 message += f"🕒 Время: {old_start.strftime('%H:%M')} - {old_end.strftime('%H:%M')}\n"
                 message += "Стало:\n" 
@@ -156,7 +157,6 @@ class BotService:
 
             # Получаем текущее время в UTC для фильтрации только будущих встреч
             now = datetime.now(timezone.utc)
-            
             # Определяем день недели (0 = понедельник, 6 = воскресенье)
             weekday = now.weekday()
             
@@ -164,12 +164,11 @@ class BotService:
             if weekday < 5:  # Будни (пн-пт)
                 # Находим ближайшую пятницу
                 days_until_friday = 4 - weekday  # 4 = пятница
-                time_max = now + timedelta(days=days_until_friday)
+                time_max = (now + timedelta(days=days_until_friday)).replace(hour=23, minute=59, second=59)
             else:  # Выходные (сб-вс)
                 # Находим пятницу следующей недели
                 days_until_next_friday = 5 + (7 - weekday)  # 5 дней до пятницы + дни до конца недели
-                time_max = now + timedelta(days=days_until_next_friday)
-            
+                time_max = (now + timedelta(days=days_until_next_friday)).replace(hour=23, minute=59, second=59)
             # Запрашиваем события начиная с текущего момента до рассчитанной даты
             events = await self.calendar_client.get_upcoming_events(
                 user_id=user_id,
@@ -181,13 +180,12 @@ class BotService:
             # Фильтруем события
             active_events = []
             for event in events:
-                # Пропускаем события без ссылки на подключение
                 if "hangoutLink" not in event:
                     continue
-                logger.info(f"event: {event.get('start')}")
-                logger.info(f"event: {event.get('end')}")
-                end_time = event["end"].get("dateTime", event["end"].get("date"))
-                end_dt = self.safe_parse_datetime(end_time)
+                start_dt = safe_parse_datetime(event["start"]["dateTime"], event["start"]["timeZone"])
+                end_dt = safe_parse_datetime(event["end"]["dateTime"], event["end"]["timeZone"])
+                event["start"]["dateTime"] = start_dt.isoformat()
+                event["end"]["dateTime"] = end_dt.isoformat()
                 if end_dt > now:
                     active_events.append(event)
 
@@ -195,12 +193,14 @@ class BotService:
                 return True, "У вас нет предстоящих онлайн-встреч на неделю.", {}, [], [], []
             deleted_events = self.db.events.check_deleted_events(user_id, active_events, now, time_max)
             updated_events = self.db.events.check_updated_event(user_id, active_events)
-            print(f"updated_events: {updated_events}")
+            print(f"updated_events: {len(updated_events)}")
+            print(f"active_events: {len(active_events)}")
+            print(f"deleted_events: {len(deleted_events)}")
             # Группируем встречи по дням
             meetings_by_day: Dict[str, List[Dict[str, Any]]] = {}
             for event in active_events:
                 start_time = event["start"].get("dateTime", event["start"].get("date"))
-                start_dt = self.safe_parse_datetime(start_time)
+                start_dt = safe_parse_datetime(start_time)
                 day_key = start_dt.strftime("%d.%m.%Y")
 
                 if day_key not in meetings_by_day:
@@ -214,22 +214,6 @@ class BotService:
             logging.error(f"Ошибка при получении встреч на неделю: {e}")
             return False, "Произошла ошибка при получении данных о встречах.", {}, [], [], []
 
-    @staticmethod
-    def safe_parse_datetime(date_str: str) -> datetime:
-        """Безопасно парсит строку даты в объект datetime"""
-        try:
-            if date_str.endswith("Z"):
-                return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            elif "+" in date_str or "-" in date_str and "T" in date_str:
-                # Преобразуем к UTC
-                dt = datetime.fromisoformat(date_str)
-                return dt.astimezone(timezone.utc)
-            else:
-                # Если дата без часового пояса, добавляем UTC
-                return datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)
-        except Exception as e:
-            logging.error(f"Ошибка при парсинге даты {date_str}: {e}")
-            return datetime.now(timezone.utc)
 
     async def send_meetings_check_by_day(
         self,
@@ -255,9 +239,9 @@ class BotService:
 
                 has_new_events = True
                 start_time = event["start"].get("dateTime", event["start"].get("date"))
-                start_dt = self.safe_parse_datetime(start_time)
+                start_dt = safe_parse_datetime(start_time, event["start"]["timeZone"])
                 end_time = event["end"].get("dateTime", event["end"].get("date"))
-                end_dt = self.safe_parse_datetime(end_time)
+                end_dt = safe_parse_datetime(end_time, event["end"]["timeZone"])
                 day_message += (
                     f"📝 {hbold('Название:')} {event['summary']}\n"
                     f"🕒 {hbold('Время:')} {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}\n"
@@ -278,12 +262,12 @@ class BotService:
         """Отправляет сообщения со встречами, сгруппированными по дням"""
         for day, day_events in sorted(meetings_by_day.items()):
             day_message = f"📆 {hbold(f'Онлайн-встречи на {day}:')}\n"
-
+            print(f"day_events: {len(day_events)}")
             for event in day_events:
                 start_time = event["start"].get("dateTime", event["start"].get("date"))
-                start_dt = self.safe_parse_datetime(start_time)
+                start_dt = safe_parse_datetime(start_time, event["start"]["timeZone"])
                 end_time = event["end"].get("dateTime", event["end"].get("date"))
-                end_dt = self.safe_parse_datetime(end_time)
+                end_dt = safe_parse_datetime(end_time, event["end"]["timeZone"])
                 day_message += (
                     f"📝 {hbold('Название:')} {event['summary']}\n"
                     f"🕒 {hbold('Время:')} {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}\n"

@@ -261,6 +261,7 @@ async def check_command(message: Message) -> None:
     )
     
     event_ids = tuple(event["id"] for event in active_events)
+    logger.info(f"event_ids: {event_ids}")
     if deleted_events:
         await bot_service.send_deleted_events(message.from_user.id, deleted_events)
         await message_check.edit_text("Обнаружены удаленные встречи.")

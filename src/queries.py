@@ -1,11 +1,12 @@
 import abc
 import logging
 import json
+import pytz
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from database import Database, User, Token, Event, Notification, Feedback
-
+from utils import safe_parse_datetime
 logger = logging.getLogger(__name__)
 
 
@@ -21,6 +22,7 @@ class FeedbackQueries(Queries):
         try:
             feedback = session.query(Feedback).filter(Feedback.user_id == user_id, Feedback.message_id == message_id).first()
             feedback.rating = rating
+            logger.info(f"Rating: {feedback.rating} от юзера: {user_id}")
             session.commit()
         except Exception as e:
             logger.error(f"Ошибка при установке рейтинга: {e}")
@@ -33,7 +35,7 @@ class FeedbackQueries(Queries):
         session = self.db.get_session()
         try:
             feedback = session.query(Feedback).filter(Feedback.user_id == user_id).order_by(Feedback.created_at.desc()).first()
-            logger.info(f"feedback: {feedback.message_id}")
+            logger.info(f"Message ID: {feedback.message_id} для юзера: {user_id}")
             return feedback.message_id if feedback else None
         except Exception as e:
             logger.error(f"Ошибка при получении ID сообщения обратной связи: {e}")
@@ -47,13 +49,13 @@ class FeedbackQueries(Queries):
         try:
             feedback = Feedback(user_id=user_id, message_id=message_id)
             session.add(feedback)
+            session.commit()
+            logger.info(f"ID сообщения {message_id} установлен для юзера: {user_id}")
         except Exception as e:
             logger.error(f"Ошибка при создании обратной связи: {e}")
             session.rollback()
-            return None
-        feedback.message_id = message_id
-        session.commit()
-        session.close()
+        finally:
+            session.close()
         
     def set_content_feedback(self, user_id: int, message_id: int, content: str) -> None:
         """Сохраняет обратную связь"""
@@ -61,12 +63,12 @@ class FeedbackQueries(Queries):
         try:
             feedback = session.query(Feedback).filter(Feedback.user_id == user_id, Feedback.message_id == message_id).first()
             feedback.content = content
+            logger.info(f"Обратная связь установлена для юзера: {user_id}")
         except Exception as e:
             logger.error(f"Ошибка при создании обратной связи: {e}")
             session.rollback()
-            return None
-        session.commit()
-        session.close()
+        finally:
+            session.close()
 
 class UserQueries(Queries):
 
@@ -85,6 +87,7 @@ class UserQueries(Queries):
                 existing_user.is_bot = user_data["is_bot"]
                 existing_user.language_code = user_data["language_code"]
                 session.commit()
+                logger.info(f"Обновлен пользователь: {existing_user}")
                 return session.merge(existing_user)  # type: ignore
 
             # Создаем нового пользователя
@@ -258,6 +261,8 @@ class TokenQueries(Queries):
             session.rollback()
             logger.error(f"Ошибка при установке ID сообщения авторизации: {e}")
             return False
+        finally:
+            session.close()
 
     def get_auth_message_id(self, user_id: int) -> int | None:
         """Получает ID сообщения авторизации"""
@@ -320,6 +325,8 @@ class EventQueries(Queries):
         except Exception as e:
             logger.error(f"Ошибка при получении статистики: {e}")
             return []
+        finally:
+            session.close()
         
     def check_deleted_events(self, user_id: int, active_events: list[dict], time_min: datetime, time_max: datetime) -> None:
         """Проверяет, было ли удалено какое либо событие из календаря за указанный период"""
@@ -332,8 +339,9 @@ class EventQueries(Queries):
                 Event.start_time >= time_min,
                 Event.start_time <= time_max
             ).all()
-            current_time = datetime.now(timezone.utc)
-
+            time_zones = [event["start"]["timeZone"] for event in active_events]
+            current_time_now = datetime.now()
+            current_time_timezone = current_time_now.astimezone(pytz.timezone(time_zones[0]))
             for event in all_events_db:
                 # Пропускаем уже завершившиеся события
                 # Добавляем часовой пояс к event.end_time, если его нет
@@ -342,7 +350,7 @@ class EventQueries(Queries):
                     event_end_time = event_end_time.replace(tzinfo=timezone.utc)
                 
                 # Всегда сравниваем в UTC
-                if event_end_time <= current_time:
+                if event_end_time <= current_time_timezone:
                     continue
                     
                 # Проверяем было ли событие удалено из активных
@@ -353,12 +361,15 @@ class EventQueries(Queries):
                         "start": event.start_time,
                         "end": event.end_time
                     })
-                    session.delete(event)
                     session.query(Notification).filter(Notification.event_id == event.event_id).delete()
+                    session.delete(event)
             session.commit()
+            return deleted_events
         except Exception as e:
             logger.error(f"Ошибка при проверке удаленных событий: {e}")
-        return deleted_events
+            return []
+        finally:
+            session.close()
     
     def check_updated_event(self, user_id: int, active_events: list[dict]) -> list:
         """Получает обновленные события"""
@@ -367,59 +378,60 @@ class EventQueries(Queries):
             updated_events = []
             
             for event in active_events:
-                logger.info(f"event: {event['summary']}")
                 event_db = session.query(Event).filter_by(event_id=event["id"]).first()
+                
+                # Проверяем, что event_db не None
+                if not event_db:
+                    logger.info(f"Событие {event['id']} не найдено в базе данных, пропускаем")
+                    continue
+                logger.info(f"event: {event['summary']}")
                 logger.info(f"event_db: {event_db.title}")
-                if event_db:
-                    # Получаем строки дат из события
-                    start_time_str = event.get("start", {}).get("dateTime", event.get("start", {}).get("date"))
-                    end_time_str = event.get("end", {}).get("dateTime", event.get("end", {}).get("date"))
+                
+                # Получаем строки дат из события
+                start_time = datetime.fromisoformat(event.get("start", {}).get("dateTime", event.get("start", {}).get("date")))
+                end_time = datetime.fromisoformat(event.get("end", {}).get("dateTime", event.get("end", {}).get("date")))
+                
+                # Добавляем часовой пояс к event_db.start_time и event_db.end_time, если его нет
+                db_start_time = safe_parse_datetime(event_db.all_data.get("start", {}).get("dateTime", event_db.all_data.get("start", {}).get("date")), event_db.all_data.get("start", {}).get("timeZone"))
+                db_end_time = safe_parse_datetime(event_db.all_data.get("end", {}).get("dateTime", event_db.all_data.get("end", {}).get("date")), event_db.all_data.get("end", {}).get("timeZone"))
+                logger.info(f"event_db: {event_db.title}")
+                logger.info(f"db_start_time: {db_start_time}")
+                logger.info(f"db_end_time: {db_end_time}")
+                logger.info(f"start_time: {start_time}")
+                logger.info(f"end_time: {end_time}")
+                
+                # Проверяем, изменились ли данные
+                if (event_db.title != event["summary"] or 
+                    event_db.meet_link != event.get("hangoutLink", "") or
+                    abs((db_start_time - start_time).total_seconds()) > 60 or
+                    abs((db_end_time - end_time).total_seconds()) > 60):
                     
-                    # Преобразуем строки в datetime
-                    start_time = self.safe_parse_datetime(start_time_str)
-                    end_time = self.safe_parse_datetime(end_time_str)
+                    old_title = event_db.title
+                    old_start = db_start_time
+                    old_end = db_end_time
+                    old_meet_link = event_db.meet_link
                     
-                    # Добавляем часовой пояс к event_db.start_time и event_db.end_time, если его нет
-                    db_start_time = event_db.start_time
-                    db_end_time = event_db.end_time
+                    # Обновляем данные события
+                    event_db.title = event["summary"]
+                    event_db.start_time = start_time
+                    event_db.end_time = end_time
+                    event_db.meet_link = event.get("hangoutLink", "")
+                    event_db.all_data = event
                     
-                    if db_start_time.tzinfo is None:
-                        db_start_time = db_start_time.replace(tzinfo=timezone.utc)
-                    if db_end_time.tzinfo is None:
-                        db_end_time = db_end_time.replace(tzinfo=timezone.utc)
-                    
-                    # Проверяем, изменились ли данные
-                    if (event_db.title != event["summary"] or 
-                        event_db.meet_link != event.get("hangoutLink", "") or
-                        abs((db_start_time - start_time).total_seconds()) > 60 or
-                        abs((db_end_time - end_time).total_seconds()) > 60):
-                        
-                        old_title = event_db.title
-                        old_start = db_start_time
-                        old_end = db_end_time
-                        old_meet_link = event_db.meet_link
-                        
-                        # Обновляем данные события
-                        event_db.title = event["summary"]
-                        event_db.start_time = start_time
-                        event_db.end_time = end_time
-                        event_db.meet_link = event.get("hangoutLink", "")
-                        event_db.all_data = event
-                        
-                        # Добавляем в список обновленных событий
-                        updated_events.append({
-                            "id": event_db.event_id,
-                            "summary": event_db.title,
-                            "old_summary": old_title,
-                            "start": start_time,
-                            "old_start": old_start,
-                            "end": end_time,
-                            "old_end": old_end,
-                            "old_meet_link": old_meet_link
-                        })
+                    # Добавляем в список обновленных событий
+                    updated_events.append({
+                        "id": event_db.event_id,
+                        "summary": event_db.title,
+                        "old_summary": old_title,
+                        "start": start_time,
+                        "old_start": old_start,
+                        "end": end_time,
+                        "old_end": old_end,
+                        "old_meet_link": old_meet_link
+                    })
             
             session.commit()
-            logger.info(f"Обновленные события: {updated_events}")
+            logger.info(f"Обновленные события: {len(updated_events)}")
             return updated_events
         except Exception as e:
             logger.error(f"Ошибка при получении обновленных событий: {e}")
@@ -428,21 +440,6 @@ class EventQueries(Queries):
         finally:
             session.close()
     
-    def safe_parse_datetime(self, date_str: str) -> datetime:
-        """Безопасно парсит строку даты в объект datetime"""
-        try:
-            if date_str.endswith("Z"):
-                return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            elif "+" in date_str or "-" in date_str and "T" in date_str:
-                # Преобразуем к UTC
-                dt = datetime.fromisoformat(date_str)
-                return dt.astimezone(timezone.utc)
-            else:
-                # Если дата без часового пояса, добавляем UTC
-                return datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)
-        except Exception as e:
-            logger.error(f"Ошибка при парсинге даты {date_str}: {e}")
-            return datetime.now(timezone.utc)
             
     def save_event(self, user_id: int, event_data: dict) -> None:
         """Сохраняет событие в базу данных"""
@@ -452,19 +449,9 @@ class EventQueries(Queries):
             # Получаем необходимые данные из события
             event_id = event_data.get("id")
             title = event_data.get("summary", "Без названия")
-
-            # Преобразуем строки дат в объекты datetime
-            start_time_str = event_data["start"].get(
-                "dateTime", event_data["start"].get("date")
-            )
-            end_time_str = event_data["end"].get(
-                "dateTime", event_data["end"].get("date")
-            )
-
             # Используем локальный метод для парсинга дат
-            start_time = self.safe_parse_datetime(start_time_str)
-            end_time = self.safe_parse_datetime(end_time_str)
-
+            start_time = safe_parse_datetime(event_data["start"]["dateTime"], event_data["start"]["timeZone"])
+            end_time = safe_parse_datetime(event_data["end"]["dateTime"], event_data["end"]["timeZone"])
             meet_link = event_data.get("hangoutLink", "")
 
             # Проверяем, существует ли уже такое событие
@@ -485,11 +472,9 @@ class EventQueries(Queries):
             session.commit()
         except Exception as e:
             logging.error(f"Ошибка при сохранении события: {e}")
-            if session:
-                session.rollback()
+            session.rollback()
         finally:
-            if session:
-                session.close()
+            session.close()
 
     def get_user_events(
         self,
@@ -526,6 +511,9 @@ class NotificationQueries(Queries):
             session.commit()
         except Exception as e:
             logger.error(f"Ошибка при сбросе данных: {e}")
+        finally:
+            session.close()
+
     # Методы для работы с уведомлениями
     def create_notification(self, event_id: int, user_id: int) -> Notification | None:
         """Создает новое уведомление"""
@@ -576,6 +564,8 @@ class NotificationQueries(Queries):
         except Exception as e:
             logger.error(f"Ошибка при получении уведомления: {e}")
             return None
+        finally:
+            session.close()
 
     def check_all_notifications_sent(self, event_ids: tuple[int], user_id: int) -> bool:
         """Проверяет, отправлены ли все уведомления для события"""
