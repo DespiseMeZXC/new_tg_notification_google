@@ -8,7 +8,13 @@ from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from aiogram.types import (
+    Message,
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    CallbackQuery,
+)
 from aiogram.utils.markdown import hbold
 from dotenv import load_dotenv
 
@@ -43,18 +49,23 @@ async def schedule_meetings_check():
             # Получаем всех пользователей из базы
             users = db.tokens.get_all_users()
             for user in users:
-                success, error_message, meetings_by_day, active_events, deleted_events, updated_events = (
-                    await bot_service.get_week_meetings(user)  # type: ignore
-                )
+                (
+                    success,
+                    error_message,
+                    meetings_by_day,
+                    active_events,
+                    deleted_events,
+                    updated_events,
+                ) = await bot_service.get_check_meetings(user)
                 event_ids = tuple(event["id"] for event in active_events)
                 if updated_events:
                     await bot_service.send_updated_events(user, updated_events)
                 if deleted_events:
                     await bot_service.send_deleted_events(user, deleted_events)
-                if db.notifications.check_all_notifications_sent(event_ids, user):  # type: ignore
+                if db.notifications.check_all_notifications_sent(event_ids, user):
                     continue
                 for i in range(len(active_events)):
-                    status = db.events.save_event(user, active_events[i])  # type: ignore
+                    status = db.events.save_event(user, active_events[i])
                 await bot_service.send_meetings_check_by_day(user, meetings_by_day)
                 if not success:
                     await bot.send_message(user, error_message)
@@ -144,16 +155,20 @@ async def server_auth_command(message: Message) -> None:
 async def handle_reply(message: Message) -> None:
     """Обрабатывает все ответы на сообщения"""
     user_id = message.from_user.id
-    
+
     # Проверяем, является ли это ответом на сообщение авторизации
     auth_message_id = db.tokens.get_auth_message_id(user_id)
-    if auth_message_id and int(message.reply_to_message.message_id) == int(auth_message_id):
+    if auth_message_id and int(message.reply_to_message.message_id) == int(
+        auth_message_id
+    ):
         await handle_auth_code_logic(message)
         return
-        
+
     # Проверяем, является ли это ответом на сообщение обратной связи
     feedback_message_id = db.feedback.get_feedback_message_id(user_id)
-    if feedback_message_id and int(message.reply_to_message.message_id) == int(feedback_message_id):
+    if feedback_message_id and int(message.reply_to_message.message_id) == int(
+        feedback_message_id
+    ):
         await handle_feedback_logic(message)
         return
 
@@ -200,22 +215,27 @@ async def handle_feedback_logic(feedback_msg: Message) -> None:
     """Логика обработки обратной связи"""
     # Обрабатываем обратную связь
     db.feedback.set_content_feedback(
-        feedback_msg.from_user.id, 
-        feedback_msg.reply_to_message.message_id, 
-        feedback_msg.text
+        feedback_msg.from_user.id,
+        feedback_msg.reply_to_message.message_id,
+        feedback_msg.text,
     )
-    
-    logger.info(f"Получен отзыв от пользователя {feedback_msg.from_user.id}: {feedback_msg.text}")
-    
+
+    logger.info(
+        f"Получен отзыв от пользователя {feedback_msg.from_user.id}: {feedback_msg.text}"
+    )
+
     await feedback_msg.answer(
         "✅ Спасибо за ваш отзыв! Мы обязательно его рассмотрим.\n"
         "Если у вас возникнут дополнительные вопросы, "
         "вы всегда можете связаться с разработчиком: @ImTaske\n\n"
         "Пожалуйста, оцените работу бота:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=
-            FeedbackCallbackFactory(feedback_msg.reply_to_message.message_id).get_feedback_buttons()
-        )
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=FeedbackCallbackFactory(
+                feedback_msg.reply_to_message.message_id
+            ).get_feedback_buttons()
+        ),
     )
+
 
 @dp.message(Command("statistics"))
 async def statistics_command(message: Message) -> None:
@@ -223,11 +243,11 @@ async def statistics_command(message: Message) -> None:
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=StatisticsCallbackFactory().get_buttons()
     )
-    
+
     await message.answer(
-        "📊 Выберите период для просмотра статистики:",
-        reply_markup=keyboard
+        "📊 Выберите период для просмотра статистики:", reply_markup=keyboard
     )
+
 
 @dp.callback_query(lambda c: json.loads(c.data).get("t") == "statistics")
 async def process_statistics_callback(callback_query: CallbackQuery) -> None:
@@ -239,12 +259,11 @@ async def process_statistics_callback(callback_query: CallbackQuery) -> None:
     period = data.get("d")
     logger.info(f"Получен период: {period}")
     user_id = callback_query.from_user.id
-    
+
     await callback_query.answer()
     statistics = bot_service.get_statistics(user_id, period)
-    await callback_query.message.edit_text(
-        f"📊 Статистика за {period}:\n{statistics}"
-    )
+    await callback_query.message.edit_text(f"📊 Статистика за {period}:\n{statistics}")
+
 
 @dp.message(Command("check"))
 async def check_command(message: Message) -> None:
@@ -256,10 +275,15 @@ async def check_command(message: Message) -> None:
     message_check = await message.answer(
         "🔍 Проверяю на наличие новых встреч...\nПожалуйста, подождите."
     )
-    success, error_message, meetings_by_day, active_events, deleted_events, updated_events = (
-        await bot_service.get_week_meetings(message.from_user.id)  # type: ignore
-    )
-    
+    (
+        success,
+        error_message,
+        meetings_by_day,
+        active_events,
+        deleted_events,
+        updated_events,
+    ) = await bot_service.get_check_meetings(message.from_user.id)
+
     event_ids = tuple(event["id"] for event in active_events)
     logger.info(f"event_ids: {event_ids}")
     if deleted_events:
@@ -270,11 +294,11 @@ async def check_command(message: Message) -> None:
         await bot_service.send_updated_events(message.from_user.id, updated_events)
         await message_check.edit_text("Обнаружены обновленные встречи.")
         return
-    if db.notifications.check_all_notifications_sent(event_ids, message.from_user.id):  # type: ignore
+    if db.notifications.check_all_notifications_sent(event_ids, message.from_user.id):
         await message_check.edit_text("Новых встреч не обнаружено.")
         return
     for i in range(len(active_events)):
-        status = db.events.save_event(message.from_user.id, active_events[i])  # type: ignore
+        status = db.events.save_event(message.from_user.id, active_events[i])
     await bot_service.send_meetings_check_by_day(message.from_user.id, meetings_by_day)
     if not success:
         await message.answer(error_message)
@@ -332,9 +356,14 @@ async def check_week_meetings(message: Message) -> None:
     user_id = message.from_user.id
     await message.answer("Проверяю ваши онлайн-встречи на неделю...")
 
-    success, error_message, meetings_by_day, active_events, deleted_events, updated_events = (
-        await bot_service.get_week_meetings(user_id)
-    )
+    (
+        success,
+        error_message,
+        meetings_by_day,
+        active_events,
+        deleted_events,
+        updated_events,
+    ) = await bot_service.get_week_meetings(user_id)
 
     if not success:
         await message.answer(error_message)
@@ -361,6 +390,7 @@ async def reset_processed_events(message: Message) -> None:
         logging.error(f"MOCK:Ошибка при сбросе данных: {e}")
         await message.answer("❌ MOCK: Произошла ошибка при сбросе данных.")
 
+
 @dp.message(Command("feedback"))
 async def feedback_command(message: Message) -> None:
     feedback_message = await message.answer(
@@ -368,10 +398,13 @@ async def feedback_command(message: Message) -> None:
         "Ваше мнение очень важно для нас и поможет сделать бота лучше!",
         reply_markup=ForceReply(
             selective=True,
-            input_field_placeholder="Введите ваш отзыв или предложение здесь"
-        )
+            input_field_placeholder="Введите ваш отзыв или предложение здесь",
+        ),
     )
-    db.feedback.create_feedback_message_id(message.from_user.id, feedback_message.message_id)
+    db.feedback.create_feedback_message_id(
+        message.from_user.id, feedback_message.message_id
+    )
+
 
 @dp.callback_query(lambda c: json.loads(c.data).get("t") == "f")
 async def process_rating_callback(callback_query: CallbackQuery) -> None:
@@ -390,17 +423,17 @@ async def process_rating_callback(callback_query: CallbackQuery) -> None:
     await callback_query.message.edit_text(
         f"📊 Спасибо за ваш рейтинг! Мы обязательно его рассмотрим.\n"
     )
-    
+
+
 # Запуск бота
 async def main() -> None:
     # Регистрируем обработчики сигналов
     for signal_type in (signal.SIGINT, signal.SIGTERM):
         asyncio.get_event_loop().add_signal_handler(
-            signal_type, lambda s=signal_type: asyncio.create_task(on_shutdown(s))  # type: ignore
+            signal_type, lambda s=signal_type: asyncio.create_task(on_shutdown(s))
         )
 
-    # Запускаем спам-сообщения
-    # asyncio.create_task(schedule_meetings_check())
+    asyncio.create_task(schedule_meetings_check())
 
     # Запускаем бота
     await dp.start_polling(bot)

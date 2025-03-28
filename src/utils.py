@@ -2,6 +2,7 @@ import logging
 import pytz
 from datetime import datetime, timezone
 
+
 def safe_parse_datetime(date_str: str, target_tz: str = "UTC") -> datetime:
     """
     Безопасно парсит строку даты в объект datetime
@@ -21,9 +22,9 @@ def safe_parse_datetime(date_str: str, target_tz: str = "UTC") -> datetime:
             # Конвертируем в целевой часовой пояс если он задан
             target_timezone = pytz.timezone(target_tz)
             return dt.astimezone(target_timezone)
-        
+
         return dt.astimezone(timezone.utc)
 
     except Exception as e:
         logging.error(f"Ошибка при парсинге даты {date_str}: {e}")
-        return datetime.now(timezone.utc) 
+        return datetime.now(timezone.utc)

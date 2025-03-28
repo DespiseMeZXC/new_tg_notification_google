@@ -23,7 +23,7 @@ BaseType = TypeVar("BaseType", bound=Any)
 
 
 # Используем Type[BaseType] для аннотаций классов моделей
-class User(Base):  # type: ignore
+class User(Base):
     """Модель пользователя системы"""
 
     __tablename__ = "users"
@@ -40,7 +40,7 @@ class User(Base):  # type: ignore
         return f"<User(id={self.id}, full_name='{self.full_name}')>"
 
 
-class Token(Base):  # type: ignore
+class Token(Base):
     """Модель токена авторизации"""
 
     __tablename__ = "tokens"
@@ -56,11 +56,11 @@ class Token(Base):  # type: ignore
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-    user = relationship("User", back_populates="tokens")  # type: ignore
+    user = relationship("User", back_populates="tokens")
     auth_message_id = Column(String(255), nullable=True)
 
 
-class Event(Base):  # type: ignore
+class Event(Base):
     """Модель события календаря"""
 
     __tablename__ = "events"
@@ -82,10 +82,10 @@ class Event(Base):  # type: ignore
     )
     all_data = Column(JSON, nullable=True)
 
-    user = relationship("User", back_populates="events")  # type: ignore
+    user = relationship("User", back_populates="events")
 
 
-class Notification(Base):  # type: ignore
+class Notification(Base):
     """Модель уведомлений о событиях"""
 
     __tablename__ = "notifications"
@@ -96,10 +96,11 @@ class Notification(Base):  # type: ignore
     sent_at = Column(DateTime, nullable=True)
     is_sent = Column(Boolean, default=True)
 
-    event = relationship("Event")  # type: ignore
-    user = relationship("User")  # type: ignore
+    event = relationship("Event")
+    user = relationship("User")
 
-class Feedback(Base):  # type: ignore
+
+class Feedback(Base):
     """Модель обратной связи"""
 
     __tablename__ = "feedback"
@@ -115,6 +116,7 @@ class Feedback(Base):  # type: ignore
         onupdate=lambda: datetime.now(timezone.utc),
     )
     rating = Column(Integer, nullable=True)
+
 
 # Определение отношений
 User.tokens = relationship("Token", back_populates="user", cascade="all, delete-orphan")
@@ -143,4 +145,4 @@ class Database:
 
     def close_all_sessions(self) -> None:
         """Закрывает все сессии"""
-        self.Session.remove()  # type: ignore
+        self.Session.remove()
