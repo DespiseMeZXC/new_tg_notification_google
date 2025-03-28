@@ -376,21 +376,26 @@ class EventQueries(Queries):
                 .all()
             )
             time_zones = [event["start"]["timeZone"] for event in active_events]
+            logger.info(f"time_zones: {time_zones}")
             current_time_now = datetime.now()
             current_time_timezone = current_time_now.astimezone(
                 pytz.timezone(time_zones[0])
             )
+            logger.info(f"current_time_now: {current_time_now}")
+            logger.info(f"current_time_timezone: {current_time_timezone}")
             for event in all_events_db:
                 # Пропускаем уже завершившиеся события
                 # Добавляем часовой пояс к event.end_time, если его нет
                 event_end_time = event.end_time
+                logger.info(f"event_end_time before: {event_end_time}")
                 if event_end_time.tzinfo is None:
                     event_end_time = event_end_time.replace(tzinfo=timezone.utc)
-
+                logger.info(f"event_end_time after: {event_end_time}")
                 # Всегда сравниваем в UTC
                 if event_end_time <= current_time_timezone:
+                    logger.info(f"Событие {event.event_id} завершено")
                     continue
-
+                logger.info(f"event_end_time: {event_end_time} <= {current_time_timezone}")
                 # Проверяем было ли событие удалено из активных
                 if event.event_id not in [event["id"] for event in active_events]:
                     deleted_events.append(

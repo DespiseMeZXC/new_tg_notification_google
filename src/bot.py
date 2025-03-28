@@ -71,8 +71,8 @@ async def schedule_meetings_check():
                     await bot.send_message(user, error_message)
         except Exception as e:
             logging.error(f"Ошибка при выполнении проверки встреч: {e}")
-        await asyncio.sleep(10)
-        # await asyncio.sleep(int(os.getenv("CHECK_INTERVAL", 300)))
+        await asyncio.sleep(int(os.getenv("CHECK_INTERVAL", 150)))
+        # await asyncio.sleep(10)
 
 
 # Добавляем обработчик сигналов для корректного завершения
