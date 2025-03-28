@@ -76,7 +76,7 @@ class GoogleCalendarClient:
                 "auth_uri": flow.client_config["auth_uri"],
                 "token_uri": flow.client_config["token_uri"],
             }
-
+            self.db.users.add_user(user_id)
             self.db.tokens.save_auth_state(user_id, flow_state, flow.redirect_uri)
             logger.info(f"URL авторизации создан для пользователя: {user_id}")
             return auth_url
@@ -118,7 +118,6 @@ class GoogleCalendarClient:
             creds = flow.credentials
 
             # Сохраняем учетные данные
-            self.db.users.add_user(user_data)
             self.db.tokens.save_token(user_id, json.loads(creds.to_json()))
             logger.info(f"Учетные данные сохранены для пользователя: {user_id}")
             return (

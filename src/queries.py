@@ -3,7 +3,9 @@ import logging
 import json
 import pytz
 from datetime import datetime, timezone, timedelta
-from typing import Any
+from typing import Any, Optional, List, Dict, Union
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from database import Database, User, Token, Event, Notification, Feedback
 from utils import safe_parse_datetime
@@ -88,32 +90,35 @@ class FeedbackQueries(Queries):
 
 class UserQueries(Queries):
 
-    def add_user(self, user_data: dict) -> User | None:
+    def add_user(self, user_data: dict | int) -> User | None:
         """Добавляет нового пользователя в базу данных"""
         session = self.db.get_session()
         try:
+            # Проверяем, является ли user_data целым числом (ID пользователя)
+            if isinstance(user_data, int):
+                # Проверяем существует ли пользователь
+                existing_user = session.query(User).filter(User.id == user_data).first()
+                if existing_user:
+                    logger.info(f"Пользователь с ID {user_data} уже существует")
+                    return existing_user
+                else:
+                    logger.error(f"Пользователь с ID {user_data} не найден и нет данных для создания")
+                    return None
+            
             # Проверяем существует ли пользователь
-            existing_user = (
-                session.query(User).filter(User.id == user_data["id"]).first()
-            )
+            existing_user = session.query(User).filter(User.id == user_data["id"]).first()
             if existing_user:
                 # Обновляем существующего пользователя
-                existing_user.username = user_data["username"]
-                existing_user.full_name = user_data["full_name"]
-                existing_user.is_bot = user_data["is_bot"]
-                existing_user.language_code = user_data["language_code"]
+                existing_user.username = user_data.get("username", existing_user.username)
+                existing_user.full_name = user_data.get("full_name", existing_user.full_name)
+                existing_user.is_bot = user_data.get("is_bot", existing_user.is_bot)
+                existing_user.language_code = user_data.get("language_code", existing_user.language_code)
                 session.commit()
                 logger.info(f"Обновлен пользователь: {existing_user}")
                 return session.merge(existing_user)
 
             # Создаем нового пользователя
-            user = User(
-                id=user_data["id"],
-                username=user_data["username"],
-                full_name=user_data["full_name"],
-                is_bot=user_data["is_bot"],
-                language_code=user_data["language_code"],
-            )
+            user = User.from_dict(user_data)
             session.add(user)
             session.commit()
             # Возвращаем объект, привязанный к сессии
@@ -218,10 +223,14 @@ class TokenQueries(Queries):
         session = self.db.get_session()
         try:
             token = session.query(Token).filter(Token.user_id == user_id).first()
-            session.delete(token)
-            session.commit()
-            logger.info(f"Токен удален для пользователя: {user_id}")
-            return True
+            if token:
+                session.delete(token)
+                session.commit()
+                logger.info(f"Токен удален для пользователя: {user_id}")
+                return True
+            else:
+                logger.info(f"Токен не найден для пользователя: {user_id}")
+                return False
         except Exception as e:
             session.rollback()
             logger.error(f"Ошибка при удалении токена: {e}")
@@ -511,42 +520,57 @@ class EventQueries(Queries):
         finally:
             session.close()
 
-    def save_event(self, user_id: int, event_data: dict) -> None:
+    def save_event(self, user_id: int, event_data: dict) -> bool:
         """Сохраняет событие в базу данных"""
+        session = self.db.get_session()
         try:
-            session = self.db.get_session()
-
-            # Получаем необходимые данные из события
+            # Проверяем существует ли событие
             event_id = event_data.get("id")
-            title = event_data.get("summary", "Без названия")
-            # Используем локальный метод для парсинга дат
-            start_time = safe_parse_datetime(
-                event_data["start"]["dateTime"], event_data["start"]["timeZone"]
-            )
-            end_time = safe_parse_datetime(
-                event_data["end"]["dateTime"], event_data["end"]["timeZone"]
-            )
-            meet_link = event_data.get("hangoutLink", "")
-
-            # Проверяем, существует ли уже такое событие
-            existing_event = session.query(Event).filter_by(event_id=event_id).first()
-            if not existing_event:
-                new_event = Event(
-                    event_id=event_id,
-                    title=title,
-                    start_time=start_time,
-                    end_time=end_time,
-                    meet_link=meet_link,
-                    user_id=user_id,
-                    all_data=event_data,
+            if not event_id:
+                logger.error(f"Отсутствует ID события в данных: {event_data}")
+                return False
+            
+            existing_event = session.query(Event).filter(Event.id == event_id).first()
+            
+            if existing_event:
+                # Обновляем существующее событие
+                existing_event.title = event_data.get("summary", "Без названия")
+                existing_event.start_time = safe_parse_datetime(
+                    event_data["start"].get("dateTime"), event_data["start"].get("timeZone")
                 )
-                logger.info(f"Событие {event_id} создано")
-                session.add(new_event)
-
+                existing_event.end_time = safe_parse_datetime(
+                    event_data["end"].get("dateTime"), event_data["end"].get("timeZone")
+                )
+                existing_event.meet_link = event_data.get("hangoutLink")
+                existing_event.all_data = event_data
+                existing_event.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                logger.info(f"Обновлено событие: {existing_event.title}")
+                return True
+            
+            # Создаем новое событие
+            event = Event(
+                id=event_id,  # Устанавливаем id равным event_id из Google Calendar
+                event_id=event_id,
+                title=event_data.get("summary", "Без названия"),
+                start_time=safe_parse_datetime(
+                    event_data["start"].get("dateTime"), event_data["start"].get("timeZone")
+                ),
+                end_time=safe_parse_datetime(
+                    event_data["end"].get("dateTime"), event_data["end"].get("timeZone")
+                ),
+                meet_link=event_data.get("hangoutLink"),
+                user_id=user_id,
+                all_data=event_data,
+            )
+            session.add(event)
             session.commit()
+            logger.info(f"Сохранено новое событие: {event.title}")
+            return True
         except Exception as e:
-            logging.error(f"Ошибка при сохранении события: {e}")
             session.rollback()
+            logger.error(f"Ошибка при сохранении события: {e}")
+            return False
         finally:
             session.close()
 
@@ -589,7 +613,7 @@ class NotificationQueries(Queries):
             session.close()
 
     # Методы для работы с уведомлениями
-    def create_notification(self, event_id: int, user_id: int) -> Notification | None:
+    def create_notification(self, event_id: str, user_id: int) -> Notification | None:
         """Создает новое уведомление"""
         session = self.db.get_session()
         try:
@@ -618,7 +642,7 @@ class NotificationQueries(Queries):
         finally:
             session.close()
 
-    def get_notification(self, event_id: int, user_id: int) -> Notification | None:
+    def get_notification(self, event_id: str, user_id: int) -> Notification | None:
         """Получает уведомление по событию и пользователю"""
         session = self.db.get_session()
         try:
@@ -641,7 +665,7 @@ class NotificationQueries(Queries):
         finally:
             session.close()
 
-    def check_all_notifications_sent(self, event_ids: tuple[int], user_id: int) -> bool:
+    def check_all_notifications_sent(self, event_ids: tuple[str], user_id: int) -> bool:
         """Проверяет, отправлены ли все уведомления для события"""
         session = self.db.get_session()
         try:

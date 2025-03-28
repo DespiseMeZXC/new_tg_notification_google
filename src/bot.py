@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Инициализация бота и диспетчера
-db = DatabaseQueries(str(BASE_DIR / "db.sqlite"))
+db = DatabaseQueries(os.getenv("DATABASE_URL"))
 calendar_client = GoogleCalendarClient(db)
 bot = Bot(token=str(os.getenv("BOT_TOKEN")))
 bot_service = BotService(db, calendar_client, bot)
@@ -121,7 +121,15 @@ async def server_auth_command(message: Message) -> None:
         logging.error("Не удалось получить пользователя из сообщения")
         return
 
-    # Создаем URL для авторизации с правильными параметрами
+    # Создаем пользователя или получаем существующего
+    user_data = {
+        "id": message.from_user.id,
+        "username": message.from_user.username or "",
+        "full_name": message.from_user.full_name or "",
+        "is_bot": message.from_user.is_bot,
+        "language_code": message.from_user.language_code or "",
+    }
+    db.users.add_user(user_data)
     db.tokens.delete_token_by_user_id(message.from_user.id)
     auth_url = calendar_client.create_auth_url(message.from_user.id)
 
