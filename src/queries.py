@@ -79,7 +79,10 @@ class FeedbackQueries(Queries):
                 .filter(Feedback.user_id == user_id, Feedback.message_id == message_id)
                 .first()
             )
+            logger.info(f"Обратная связь найденная: {feedback}")
+            logger.info(f"Обратная связь: {content}")
             feedback.content = content
+            session.commit()
             logger.info(f"Обратная связь установлена для юзера: {user_id}")
         except Exception as e:
             logger.error(f"Ошибка при создании обратной связи: {e}")

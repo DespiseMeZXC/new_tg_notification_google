@@ -119,7 +119,7 @@ class Notification(Base):
     id = Column(Integer, primary_key=True)
     event_id = Column(String(255), ForeignKey("events.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    sent_at = Column(DateTime, nullable=True)
+    sent_at = Column(DateTime, nullable=True, default=lambda: datetime.now(timezone.utc))
     is_sent = Column(Boolean, default=True)
 
     event = relationship("Event")
