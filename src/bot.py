@@ -11,7 +11,6 @@ from aiogram.filters import Command
 from aiogram.types import (
     Message,
     ForceReply,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     CallbackQuery,
 )
@@ -22,7 +21,7 @@ from google_calendar_client import GoogleCalendarClient
 from queries import DatabaseQueries
 from services import BotService
 from inline_buttons import StatisticsCallbackFactory, FeedbackCallbackFactory
-
+from buttons import KeyboardAccount, KeyboardAccountsList, KeyboardAccountActions
 # Загрузка переменных окружения
 load_dotenv()
 
@@ -95,7 +94,16 @@ async def command_start(message: Message) -> None:
     if message.from_user is None:
         logging.error("Не удалось получить пользователя из сообщения")
         return
-
+    
+    user_data = {
+        "id": message.from_user.id,
+        "username": message.from_user.username or "",
+        "full_name": message.from_user.full_name or "",
+        "is_bot": message.from_user.is_bot,
+        "language_code": message.from_user.language_code or "",
+    }
+    
+    db.users.add_user(user_data)
     user_id = message.from_user.id
 
     await message.answer(
@@ -106,14 +114,109 @@ async def command_start(message: Message) -> None:
         "1. Через браузер с кодом авторизации: /auth (Рекомендуется)\n"
         "2. Ручной ввод токена (для продвинутых пользователей): /manualtoken\n"
         "Если вы ещё не получали доступ к боту или у вас возникли проблемы, или предложения, напишите разработчику @ImTaske\n"
-        "Обратную связь можно оставить с помощью команды /feedback"
+        "Обратную связь можно оставить с помощью команды /feedback",
+        reply_markup=KeyboardAccount().keyboard_account
     )
 
     logging.info(
         f"Команда /start от пользователя ID: {user_id}, имя: {message.from_user.full_name if message.from_user.full_name else 'Неизвестно'}"
     )
+    
+    
+@dp.message(F.text == "🔐 Аккаунты Google")
+async def accounts_command(message: Message) -> None:
+    if not message.from_user:
+        return
+    
+    user_tokens = db.tokens.get_all_tokens_by_user_id(message.from_user.id)
+    if not user_tokens:
+        await message.answer(
+            "У вас пока нет привязанных аккаунтов Google.\n"
+            "Для добавления используйте команду /auth"
+        )
+        return
+
+    user_emails = [f"🔐 Информация об аккаунте {token.email}" for token in user_tokens if token.email]
+   
+    await message.answer(
+        "Выберите действие:",
+        reply_markup=KeyboardAccountsList().get_keyboard_accounts_list(user_emails)
+    )
 
 
+@dp.message(F.text == "🔐 Добавить аккаунт")
+async def add_account_command(message: Message) -> None:
+    await message.answer("В разработке...")
+
+
+@dp.message(lambda message: message.text and message.text.startswith("🔐 Информация об аккаунте ") and "@" in message.text)
+async def account_info(message: Message) -> None:
+    if not message.from_user:
+        return
+        
+    email = message.text.replace("🔐 Информация об аккаунте ", "")
+    user_tokens = db.tokens.get_all_tokens_by_user_id(message.from_user.id)
+    selected_token = next((token for token in user_tokens if token.email == email), None)
+    
+    if selected_token:
+        await message.answer(
+            f"Информация об аккаунте:\n"
+            f"Email: {email}\n"
+            f"Дата добавления: {selected_token.created_at.strftime('%d.%m.%Y %H:%M')}\n",
+            reply_markup=KeyboardAccountActions().get_keyboard_account_actions()
+        )
+    else:
+        await message.answer(
+            "Аккаунт не найден.",
+            reply_markup=KeyboardAccount().keyboard_account
+        )
+
+@dp.message(F.text == "🔐 Удалить аккаунт")
+async def handle_account_select(message: Message) -> None:
+    if not message.from_user:
+        return
+    user_tokens = db.tokens.get_all_tokens_by_user_id(message.from_user.id)
+    if not user_tokens:
+        await message.answer(
+            "У вас пока нет привязанных аккаунтов Google.\n"
+            "Для добавления используйте команду /auth"
+        )
+        return
+
+    # Формируем список кнопок в формате "❌ Удалить email@gmail.com"
+    user_emails = [f"❌ Удалить {token.email}" for token in user_tokens if token.email]
+    await message.answer(
+        f"Выберите аккаунт для удаления:",
+        reply_markup=KeyboardAccountsList().get_keyboard_accounts_list(user_emails)
+    )
+
+@dp.message(lambda message: message.text.startswith("❌ Удалить ") and "@" in message.text)
+async def delete_specific_account(message: Message) -> None:
+    if not message.from_user:
+        return
+        
+    # Извлекаем email из текста кнопки
+    email = message.text.replace("❌ Удалить ", "")
+    user_tokens = db.tokens.get_all_tokens_by_user_id(message.from_user.id)
+    selected_token = next((token for token in user_tokens if token.email == email), None)
+    
+    if selected_token:
+        if db.tokens.delete_token_by_user_id(message.from_user.id):
+            await message.answer(
+                f"Аккаунт {email} успешно удален.",
+                reply_markup=KeyboardAccount().keyboard_account
+            )
+        else:
+            await message.answer(
+                "Произошла ошибка при удалении аккаунта. Попробуйте позже.",
+                reply_markup=KeyboardAccount().keyboard_account
+            )
+    else:
+        await message.answer(
+            "Аккаунт не найден.",
+            reply_markup=KeyboardAccount().keyboard_account
+        )
+            
 # Команда /auth для авторизации на сервере
 @dp.message(Command("auth"))
 async def server_auth_command(message: Message) -> None:
@@ -121,16 +224,6 @@ async def server_auth_command(message: Message) -> None:
         logging.error("Не удалось получить пользователя из сообщения")
         return
 
-    # Создаем пользователя или получаем существующего
-    user_data = {
-        "id": message.from_user.id,
-        "username": message.from_user.username or "",
-        "full_name": message.from_user.full_name or "",
-        "is_bot": message.from_user.is_bot,
-        "language_code": message.from_user.language_code or "",
-    }
-    db.users.add_user(user_data)
-    db.tokens.delete_token_by_user_id(message.from_user.id)
     auth_url = calendar_client.create_auth_url(message.from_user.id)
 
     if isinstance(auth_url, str) and auth_url.startswith("Ошибка"):
@@ -459,7 +552,7 @@ async def main() -> None:
             signal_type, lambda s=signal_type: asyncio.create_task(on_shutdown(s))
         )
 
-    asyncio.create_task(schedule_meetings_check())
+    # asyncio.create_task(schedule_meetings_check())
 
     # Запускаем бота
     await dp.start_polling(bot)

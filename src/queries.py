@@ -7,7 +7,7 @@ from typing import Any, Optional, List, Dict, Union
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
-from database import Database, User, Token, Event, Notification, Feedback
+from database import Database, User, Token, Event, Notification, Feedback, UserTokenLink
 from utils import safe_parse_datetime
 
 logger = logging.getLogger(__name__)
@@ -204,6 +204,19 @@ class TokenQueries(Queries):
             return None
         finally:
             session.close()
+    
+    def get_all_tokens_by_user_id(self, user_id: int) -> Any:
+        """Получает все токены для пользователя"""
+        session = self.db.get_session()
+        try:
+            tokens = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id).all()
+            return tokens
+        except Exception as e:
+            logger.error(f"Ошибка при получении всех токенов для пользователя: {e}")
+            return []
+        finally:
+            session.close()
+            
 
     def get_auth_state(self, user_id: int) -> tuple[dict | None, str | None]:
         """Получение состояния авторизации"""
@@ -225,7 +238,7 @@ class TokenQueries(Queries):
         """Удаляет токен для пользователя"""
         session = self.db.get_session()
         try:
-            token = session.query(Token).filter(Token.user_id == user_id).first()
+            token = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id).first()
             if token:
                 session.delete(token)
                 session.commit()

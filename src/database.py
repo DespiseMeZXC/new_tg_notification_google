@@ -9,6 +9,9 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
     JSON,
+    Table,
+    CheckConstraint,
+    text,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, scoped_session
@@ -36,6 +39,9 @@ class User(Base):
     is_bot = Column(Boolean, default=False)
     language_code = Column(String(10), nullable=True)
     is_active = Column(Boolean, default=True)
+
+    # Отношение многие-ко-многим с токенами
+    tokens = relationship("Token", back_populates="users", secondary="user_tokens_link")
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, full_name='{self.full_name}')>"
@@ -66,13 +72,35 @@ class User(Base):
         )
 
 
+class UserTokenLink(Base):
+    """Промежуточная таблица для связи многие-ко-многим между User и Token"""
+
+    __tablename__ = "user_tokens_link"
+    
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    token_id = Column(Integer, ForeignKey("tokens.id"), primary_key=True)
+
+    # Добавляем проверку на максимальное количество токенов для пользователя
+    __table_args__ = (
+        CheckConstraint(
+            text(
+                "user_id NOT IN ("
+                "SELECT user_id FROM user_tokens_link "
+                "GROUP BY user_id HAVING COUNT(*) >= 5"
+                ")"
+            ),
+            name="check_max_tokens_per_user"
+        ),
+    )
+
+
 class Token(Base):
     """Модель токена авторизации"""
 
     __tablename__ = "tokens"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    email = Column(String(255), nullable=True)  # Email, к которому привязан токен
     token_data = Column(String(2048), nullable=False)  # Хранение токена в JSON формате
     status = Column(String(50), nullable=True)  # Статус токена
     redirect_url = Column(String(255), nullable=True)  # URL для перенаправления
@@ -82,8 +110,13 @@ class Token(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-    user = relationship("User", back_populates="tokens")
     auth_message_id = Column(String(255), nullable=True)
+    
+    # Отношение многие-ко-многим с пользователями
+    users = relationship("User", back_populates="tokens", secondary="user_tokens_link")
+    
+    # Отношение один-ко-многим с событиями
+    events = relationship("Event", back_populates="token", cascade="all, delete-orphan")
 
 
 class Event(Base):
@@ -100,6 +133,7 @@ class Event(Base):
     end_time = Column(DateTime, nullable=False)
     meet_link = Column(String(255), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token_id = Column(Integer, ForeignKey("tokens.id"), nullable=False)  # Связь с токеном
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         DateTime,
@@ -109,6 +143,7 @@ class Event(Base):
     all_data = Column(JSON, nullable=True)
 
     user = relationship("User", back_populates="events")
+    token = relationship("Token", back_populates="events")  # Связь с токеном
 
 
 class Notification(Base):
@@ -145,7 +180,6 @@ class Feedback(Base):
 
 
 # Определение отношений
-User.tokens = relationship("Token", back_populates="user", cascade="all, delete-orphan")
 User.events = relationship("Event", back_populates="user", cascade="all, delete-orphan")
 
 
