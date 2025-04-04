@@ -168,24 +168,29 @@ class TokenQueries(Queries):
         session = self.db.get_session()
         try:
             # Проверяем, существует ли уже токен для этого пользователя
-            token = session.query(Token).filter(Token.user_id == user_id).first()
-
-            if token:
+            logger.info(f"token_data: {token_data}")
+            ready_token = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id, Token.email == token_data.get('email'), Token.status == "ready").first()
+            auth_token = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id, Token.status == "auth").first()
+            if ready_token:
                 # Обновляем существующий токен
-                token.token_data = json.dumps(token_data)
-                token.updated_at = datetime.utcnow()
+                session.delete(session.query(UserTokenLink).filter(UserTokenLink.user_id == user_id, UserTokenLink.token_id == auth_token.id).first())
+                session.delete(auth_token)
+                session.commit()
+                return False, "❌ Данный email уже используется"
             else:
-                # Создаем новый токен
-                token = Token(user_id=user_id, token_data=json.dumps(token_data))
-                session.add(token)
-
-            session.commit()
-            logger.info(f"Токен сохранен для пользователя: {user_id}")
-            return True
+                if auth_token:
+                    # Обновляем существующий токен
+                    auth_token.token_data = json.dumps(token_data)
+                    auth_token.email = token_data.get('email')
+                    auth_token.status = "ready"
+                    session.commit()
+                    logger.info(f"Токен сохранен для пользователя: {user_id}")
+                    return True, "Токен сохранен"
+                session.commit()
         except Exception as e:
             session.rollback()
             logger.error(f"Ошибка при сохранении токена: {e}")
-            return False
+            return False, f"Ошибка при сохранении токена: {e}"
         finally:
             session.close()
 
@@ -222,7 +227,11 @@ class TokenQueries(Queries):
         """Получение состояния авторизации"""
         session = self.db.get_session()
         try:
-            token = session.query(Token).filter(Token.user_id == user_id).first()
+            token = session.query(Token).join(UserTokenLink).filter(
+                UserTokenLink.user_id == user_id, 
+                Token.status == "auth"
+            ).first()
+            
             if token:
                 logger.info(f"Успешно получен токен: {token}")
                 return json.loads(token.token_data), token.redirect_url
@@ -255,28 +264,43 @@ class TokenQueries(Queries):
             session.close()
 
     def save_auth_state(
-        self, user_id: int, flow_state: dict, redirect_uri: str
+        self, user_id: int, flow_state: dict, redirect_uri: str, status_auth: str
     ) -> bool:
         """Сохранение состояния авторизации"""
         session = self.db.get_session()
         try:
             # Проверяем, существует ли уже токен для этого пользователя
-            token = session.query(Token).filter(Token.user_id == user_id).first()
-
-            if token:
+            tokens = session.query(UserTokenLink).filter(UserTokenLink.user_id == user_id).all()
+            not_auth_tokens = session.query(Token).filter(Token.status == status_auth).all()
+            logger.info(f"\nnot_auth_tokens: {not_auth_tokens}")
+            for token in not_auth_tokens:
+                # Находим связку для текущего токена
+                token_link = session.query(UserTokenLink).filter(
+                    UserTokenLink.token_id == token.id
+                ).first()
+                
+                # Если связка существует, удаляем её
+                if token_link:
+                    session.delete(token_link)
+                
+                # Удаляем сам токен
+                session.delete(token)
+                session.commit()
+            if len(tokens) >= 5:
                 # Обновляем существующий токен с данными состояния авторизации
-                token.token_data = json.dumps(flow_state)
-                token.redirect_url = redirect_uri
-                token.updated_at = datetime.utcnow()
+                return False
             else:
                 # Создаем новый токен с данными состояния авторизации
                 token = Token(
-                    user_id=user_id,
                     token_data=json.dumps(flow_state),
                     redirect_url=redirect_uri,
+                    status=status_auth
                 )
                 session.add(token)
-
+            filter_user_token_link = session.query(UserTokenLink).filter(UserTokenLink.user_id == user_id, UserTokenLink.token_id == token.id).first()
+            if not filter_user_token_link:
+                user_token_link = UserTokenLink(user_id=user_id, token_id=token.id)
+                session.add(user_token_link)
             session.commit()
             logger.info(f"Состояние авторизации сохранено для пользователя: {user_id}")
             return True
@@ -291,8 +315,15 @@ class TokenQueries(Queries):
         """Устанавливает ID сообщения авторизации"""
         session = self.db.get_session()
         try:
-            token = session.query(Token).filter(Token.user_id == user_id).first()
-            token.auth_message_id = str(auth_message_id)
+            token = session.query(Token).join(UserTokenLink).filter(
+                UserTokenLink.user_id == user_id, 
+                Token.status == "auth"
+            ).first()
+            if token:
+                token.auth_message_id = str(auth_message_id)
+            else:
+                logger.warning(f"Токен не найден для пользователя {user_id}")
+                return False
             session.commit()
             logger.info(
                 f"ID сообщения авторизации установлен для пользователя: {user_id}"
@@ -309,9 +340,12 @@ class TokenQueries(Queries):
         """Получает ID сообщения авторизации"""
         session = self.db.get_session()
         try:
-            token = session.query(Token).filter(Token.user_id == user_id).first()
+            token = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id, Token.status == "auth").first()
+            if not token:
+                logger.info(f"Токены не найдены для пользователя: {user_id}")
+                return None
             logger.info(f"Успешно получен токен: {token}")
-            return token.auth_message_id if token else None
+            return token.auth_message_id
         except Exception as e:
             logger.error(f"Ошибка при получении ID сообщения авторизации: {e}")
             return None
@@ -320,6 +354,7 @@ class TokenQueries(Queries):
 
 
 class EventQueries(Queries):
+    
 
     def reset_processed_events(self, user_id: int) -> None:
         """Сбрасывает все данные в базе"""

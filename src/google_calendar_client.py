@@ -9,13 +9,15 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+from requests_oauthlib import OAuth2Session
 
 from queries import DatabaseQueries
 
 logger = logging.getLogger(__name__)
 
 # Области доступа для Google Calendar API
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/calendar.readonly", 
+          "https://www.googleapis.com/auth/userinfo.email"]  # Добавляем scope для доступа к email
 
 
 class GoogleCalendarClient:
@@ -72,12 +74,14 @@ class GoogleCalendarClient:
                 "client_id": flow.client_config["client_id"],
                 "client_secret": flow.client_config["client_secret"],
                 "state": state,
-                "scopes": SCOPES,
+                "scopes": SCOPES,  # Сохраняем точный список scopes
                 "auth_uri": flow.client_config["auth_uri"],
                 "token_uri": flow.client_config["token_uri"],
             }
             self.db.users.add_user(user_id)
-            self.db.tokens.save_auth_state(user_id, flow_state, flow.redirect_uri)
+            state_auth = self.db.tokens.save_auth_state(user_id, flow_state, flow.redirect_uri, "auth")
+            if not state_auth:
+                return "❌ Вы исчерпали лимит на количество авторизаций(5)."
             logger.info(f"URL авторизации создан для пользователя: {user_id}")
             return auth_url
         except Exception as e:
@@ -98,7 +102,7 @@ class GoogleCalendarClient:
                     "Сессия авторизации истекла. Пожалуйста, начните заново с команды /auth",
                 )
 
-            # Создаем новый flow
+            # Создаем новый flow с сохраненными scopes
             flow = InstalledAppFlow.from_client_secrets_file(
                 self.credentials_file, SCOPES, redirect_uri=redirect_uri
             )
@@ -112,14 +116,66 @@ class GoogleCalendarClient:
                     "token_uri": flow_state["token_uri"],
                 }
             )
+            
+            # Устанавливаем состояние из сохраненного flow_state
+            flow.state = flow_state["state"]
 
-            # Обмениваем код на токены
-            flow.fetch_token(code=code)
-            creds = flow.credentials
+            try:
+                # Обмениваем код на токены, игнорируя изменения в scope
+                flow.oauth2session.scope = None  # Игнорируем проверку scope
+                flow.fetch_token(code=code)
+                creds = flow.credentials
+            except Exception as e:
+                logger.error(f"Ошибка при обмене кода на токены: {e}")
+                # Альтернативный способ получения токена
+                try:
+                    
+                    redirect_response = f"urn:ietf:wg:oauth:2.0:oob?code={code}"
+                    oauth2_session = OAuth2Session(
+                        client_id=flow_state["client_id"],
+                        redirect_uri=redirect_uri,
+                        scope=SCOPES
+                    )
+                    
+                    # Отключаем проверку scope
+                    oauth2_session._client.verify_token = lambda token_data: None
+                    
+                    token = oauth2_session.fetch_token(
+                        token_url=flow_state["token_uri"],
+                        client_secret=flow_state["client_secret"],
+                        authorization_response=redirect_response
+                    )
+                    
+                    creds = Credentials(
+                        token=token.get('access_token'),
+                        refresh_token=token.get('refresh_token'),
+                        token_uri=flow_state["token_uri"],
+                        client_id=flow_state["client_id"],
+                        client_secret=flow_state["client_secret"],
+                        scopes=SCOPES
+                    )
+                except Exception as inner_e:
+                    logger.error(f"Альтернативный способ получения токена также не удался: {inner_e}")
+                    return False, f"❌ Ошибка при обработке кода авторизации: {str(e)}"
+            
+            try:
+                # Получаем email пользователя
+                service = build('oauth2', 'v2', credentials=creds)
+                user_info = service.userinfo().get().execute()
+                email = user_info.get('email')
+            except Exception as e:
+                logger.warning(f"Не удалось получить email пользователя: {e}")
+                email = None
 
-            # Сохраняем учетные данные
-            self.db.tokens.save_token(user_id, json.loads(creds.to_json()))
-            logger.info(f"Учетные данные сохранены для пользователя: {user_id}")
+            # Сохраняем учетные данные и email
+            token_data = json.loads(creds.to_json())
+            if email:
+                token_data['email'] = email
+            
+            success, message = self.db.tokens.save_token(user_id, token_data)
+            if not success:
+                return False, message
+            logger.info(f"Учетные данные сохранены для пользователя: {user_id} с email: {email}")
             return (
                 True,
                 "✅ Авторизация успешно завершена! Теперь вы можете использовать команды бота.",
