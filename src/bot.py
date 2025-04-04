@@ -237,25 +237,18 @@ async def delete_specific_account(message: Message) -> None:
         
     # Извлекаем email из текста кнопки
     email = message.text.replace("❌ Удалить ", "")
-    user_tokens = db.tokens.get_all_tokens_by_user_id(message.from_user.id)
-    selected_token = next((token for token in user_tokens if token.email == email), None)
     
-    if selected_token:
-        if db.tokens.delete_token_by_user_id(message.from_user.id):
-            await message.answer(
-                f"Аккаунт {email} успешно удален.",
-                reply_markup=KeyboardAccount().keyboard_account
-            )
-        else:
-            await message.answer(
-                "Произошла ошибка при удалении аккаунта. Попробуйте позже.",
-                reply_markup=KeyboardAccount().keyboard_account
-            )
-    else:
+    if db.tokens.delete_token_by_email(message.from_user.id, email):
         await message.answer(
-            "Аккаунт не найден.",
+            f"Аккаунт {email} успешно удален.",
             reply_markup=KeyboardAccount().keyboard_account
         )
+    else:
+        await message.answer(
+            "Произошла ошибка при удалении аккаунта. Попробуйте позже.",
+            reply_markup=KeyboardAccount().keyboard_account
+        )
+    
             
 # Команда /auth для авторизации на сервере
 @dp.message(Command("auth"))

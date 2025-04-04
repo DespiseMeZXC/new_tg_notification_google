@@ -243,18 +243,19 @@ class TokenQueries(Queries):
         finally:
             session.close()
 
-    def delete_token_by_user_id(self, user_id: int) -> bool:
+    def delete_token_by_email(self, user_id: int, email: str) -> bool:
         """Удаляет токен для пользователя"""
         session = self.db.get_session()
         try:
-            token = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id).first()
+            token = session.query(Token).join(UserTokenLink).filter(Token.email == email, UserTokenLink.user_id == user_id).first()
             if token:
+                session.delete(session.query(UserTokenLink).filter(UserTokenLink.token_id == token.id).first())
                 session.delete(token)
                 session.commit()
-                logger.info(f"Токен удален для пользователя: {user_id}")
+                logger.info(f"Токен удален для пользователя: {email} и {user_id}")
                 return True
             else:
-                logger.info(f"Токен не найден для пользователя: {user_id}")
+                logger.info(f"Токен не найден для пользователя: {email} и {user_id}")
                 return False
         except Exception as e:
             session.rollback()
