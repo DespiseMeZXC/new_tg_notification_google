@@ -80,19 +80,7 @@ class UserTokenLink(Base):
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
     token_id = Column(Integer, ForeignKey("tokens.id"), primary_key=True)
 
-    # Добавляем проверку на максимальное количество токенов для пользователя
-    __table_args__ = (
-        CheckConstraint(
-            text(
-                "user_id NOT IN ("
-                "SELECT user_id FROM user_tokens_link "
-                "GROUP BY user_id HAVING COUNT(*) >= 5"
-                ")"
-            ),
-            name="check_max_tokens_per_user"
-        ),
-    )
-
+    
 
 class Token(Base):
     """Модель токена авторизации"""
@@ -132,7 +120,6 @@ class Event(Base):
     start_time = Column(DateTime, nullable=False)
     end_time = Column(DateTime, nullable=False)
     meet_link = Column(String(255), nullable=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     token_id = Column(Integer, ForeignKey("tokens.id"), nullable=False)  # Связь с токеном
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
@@ -142,7 +129,6 @@ class Event(Base):
     )
     all_data = Column(JSON, nullable=True)
 
-    user = relationship("User", back_populates="events")
     token = relationship("Token", back_populates="events")  # Связь с токеном
 
 
@@ -153,13 +139,12 @@ class Notification(Base):
 
     id = Column(Integer, primary_key=True)
     event_id = Column(String(255), ForeignKey("events.id"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token_id = Column(Integer, ForeignKey("tokens.id"), nullable=False)
     sent_at = Column(DateTime, nullable=True, default=lambda: datetime.now(timezone.utc))
     is_sent = Column(Boolean, default=True)
 
     event = relationship("Event")
-    user = relationship("User")
-
+    token = relationship("Token")
 
 class Feedback(Base):
     """Модель обратной связи"""
@@ -177,10 +162,6 @@ class Feedback(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
     rating = Column(Integer, nullable=True)
-
-
-# Определение отношений
-User.events = relationship("Event", back_populates="user", cascade="all, delete-orphan")
 
 
 class Database:

@@ -168,6 +168,11 @@ async def add_account_command(message: Message) -> None:
             f"❌ {auth_url}\n" "Пожалуйста, сообщите об этой ошибке администратору."
         )
         return
+    if auth_url == "❌ Нажмите /start и попробуйте снова.":
+        await message.answer(
+            f"Пожалуйста, нажмите /start и попробуйте снова."
+        )
+        return
     # Отправляем сообщение с инструкцией и сохраняем его ID
     auth_message = await message.answer(
         "📱 <b>Инструкция по авторизации на сервере:</b>\n\n"
@@ -417,6 +422,7 @@ async def check_command(message: Message) -> None:
     event_ids = tuple(event["id"] for event in active_events)
     logger.info(f"event_ids: {event_ids}")
     if deleted_events:
+        logger.info(f"deleted_events: {len(deleted_events)}")
         await bot_service.send_deleted_events(message.from_user.id, deleted_events)
         await message_check.edit_text("Обнаружены удаленные встречи.")
         return
@@ -494,7 +500,12 @@ async def check_week_meetings(message: Message) -> None:
         deleted_events,
         updated_events,
     ) = await bot_service.get_week_meetings(user_id)
-
+    logger.info(f"success: {success}")
+    logger.info(f"error_message: {error_message}")
+    logger.info(f"meetings_by_day: {meetings_by_day}")
+    logger.info(f"active_events: {len(active_events)}")
+    logger.info(f"deleted_events: {len(deleted_events)}")
+    logger.info(f"updated_events: {len(updated_events)}")
     if not success:
         await message.answer(error_message)
         return
@@ -582,7 +593,7 @@ async def main() -> None:
             signal_type, lambda s=signal_type: asyncio.create_task(on_shutdown(s))
         )
 
-    # asyncio.create_task(schedule_meetings_check())
+    asyncio.create_task(schedule_meetings_check())
 
     # Запускаем бота
     await dp.start_polling(bot)

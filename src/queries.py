@@ -150,6 +150,19 @@ class UserQueries(Queries):
 
 class TokenQueries(Queries):
 
+    def get_all_tokens(self, user_id: int) -> Any:
+        """Получает все токены"""
+        session = self.db.get_session()
+        try:
+            tokens = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id).all()
+            return tokens
+        except Exception as e:
+            logger.error(f"Ошибка при получении всех токенов: {e}")
+            return []
+        finally:
+            session.close()
+    
+    
     def get_all_users(self) -> Any:
         """Получает всех пользователей"""
         session = self.db.get_session()
@@ -168,7 +181,6 @@ class TokenQueries(Queries):
         session = self.db.get_session()
         try:
             # Проверяем, существует ли уже токен для этого пользователя
-            logger.info(f"token_data: {token_data}")
             ready_token = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id, Token.email == token_data.get('email'), Token.status == "ready").first()
             auth_token = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id, Token.status == "auth").first()
             if ready_token:
@@ -198,7 +210,7 @@ class TokenQueries(Queries):
         """Получает токен пользователя"""
         session = self.db.get_session()
         try:
-            token = session.query(Token).filter(Token.user_id == user_id).first()
+            token = session.query(Token).join(UserTokenLink).filter(UserTokenLink.user_id == user_id).first()
             if token:
                 logger.info(f"Успешно получен токен: {token}")
                 return json.loads(token.token_data)
@@ -274,6 +286,8 @@ class TokenQueries(Queries):
             tokens = session.query(UserTokenLink).filter(UserTokenLink.user_id == user_id).all()
             not_auth_tokens = session.query(Token).filter(Token.status == status_auth).all()
             logger.info(f"\nnot_auth_tokens: {not_auth_tokens}")
+            if not session.query(User).filter(User.id == user_id).first():
+                return False, "❌ Нажмите /start и попробуйте снова."
             for token in not_auth_tokens:
                 # Находим связку для текущего токена
                 token_link = session.query(UserTokenLink).filter(
@@ -289,7 +303,7 @@ class TokenQueries(Queries):
                 session.commit()
             if len(tokens) >= 5:
                 # Обновляем существующий токен с данными состояния авторизации
-                return False
+                return False, "❌ Вы исчерпали лимит на количество авторизаций(5)."
             else:
                 # Создаем новый токен с данными состояния авторизации
                 token = Token(
@@ -304,11 +318,11 @@ class TokenQueries(Queries):
                 session.add(user_token_link)
             session.commit()
             logger.info(f"Состояние авторизации сохранено для пользователя: {user_id}")
-            return True
+            return True, "Состояние авторизации сохранено"
         except Exception as e:
             session.rollback()
             logger.error(f"Ошибка при сохранении состояния авторизации: {e}")
-            return False
+            return False, f"Ошибка при сохранении состояния авторизации: {e}"
         finally:
             session.close()
 
@@ -427,36 +441,32 @@ class EventQueries(Queries):
         deleted_events = []
         try:
             # Получаем все события из БД за указанный период
+            tokens = session.query(UserTokenLink).filter(UserTokenLink.user_id == user_id).all()
+            token_ids = [token.token_id for token in tokens]
             all_events_db = (
                 session.query(Event)
                 .filter(
-                    Event.user_id == user_id,
+                    Event.token_id.in_(token_ids),
                     Event.start_time >= time_min,
                     Event.start_time <= time_max,
                 )
                 .all()
             )
             time_zones = [event["start"]["timeZone"] for event in active_events]
-            logger.info(f"time_zones: {time_zones}")
             current_time_now = datetime.now()
             current_time_timezone = current_time_now.astimezone(
                 pytz.timezone(time_zones[0])
             )
-            logger.info(f"current_time_now: {current_time_now}")
-            logger.info(f"current_time_timezone: {current_time_timezone}")
             for event in all_events_db:
                 # Пропускаем уже завершившиеся события
                 # Добавляем часовой пояс к event.end_time, если его нет
                 event_end_time = event.end_time
-                logger.info(f"event_end_time before: {event_end_time}")
                 if event_end_time.tzinfo is None:
                     event_end_time = event_end_time.replace(tzinfo=timezone.utc)
-                logger.info(f"event_end_time after: {event_end_time}")
                 # Всегда сравниваем в UTC
                 if event_end_time <= current_time_timezone:
                     logger.info(f"Событие {event.event_id} завершено")
                     continue
-                logger.info(f"event_end_time: {event_end_time} <= {current_time_timezone}")
                 # Проверяем было ли событие удалено из активных
                 if event.event_id not in [event["id"] for event in active_events]:
                     deleted_events.append(
@@ -465,6 +475,7 @@ class EventQueries(Queries):
                             "summary": event.title,
                             "start": event.start_time,
                             "end": event.end_time,
+                            "token_email": event.token.email,
                         }
                     )
                     session.query(Notification).filter(
@@ -494,8 +505,6 @@ class EventQueries(Queries):
                         f"Событие {event['id']} не найдено в базе данных, пропускаем"
                     )
                     continue
-                logger.info(f"event: {event['summary']}")
-                logger.info(f"event_db: {event_db.title}")
 
                 # Получаем строки дат из события
                 start_time = datetime.fromisoformat(
@@ -522,12 +531,6 @@ class EventQueries(Queries):
                     ),
                     event_db.all_data.get("end", {}).get("timeZone"),
                 )
-                logger.info(f"event_db: {event_db.title}")
-                logger.info(f"db_start_time: {db_start_time}")
-                logger.info(f"db_end_time: {db_end_time}")
-                logger.info(f"start_time: {start_time}")
-                logger.info(f"end_time: {end_time}")
-
                 # Проверяем, изменились ли данные
                 if (
                     event_db.title != event["summary"]
@@ -559,6 +562,7 @@ class EventQueries(Queries):
                             "end": end_time,
                             "old_end": old_end,
                             "old_meet_link": old_meet_link,
+                            "token_email": event_db.token.email,
                         }
                     )
 
@@ -601,6 +605,10 @@ class EventQueries(Queries):
                 return True
             
             # Создаем новое событие
+            token = session.query(Token).filter(Token.email == event_data.get("token_email")).first()
+            if not token:
+                logger.error(f"Токен не найден для события: {event_data}")
+                return False
             event = Event(
                 id=event_id,  # Устанавливаем id равным event_id из Google Calendar
                 event_id=event_id,
@@ -612,7 +620,7 @@ class EventQueries(Queries):
                     event_data["end"].get("dateTime"), event_data["end"].get("timeZone")
                 ),
                 meet_link=event_data.get("hangoutLink"),
-                user_id=user_id,
+                token_id=token.id,
                 all_data=event_data,
             )
             session.add(event)
@@ -665,15 +673,16 @@ class NotificationQueries(Queries):
             session.close()
 
     # Методы для работы с уведомлениями
-    def create_notification(self, event_id: str, user_id: int) -> Notification | None:
+    def create_notification(self, event_id: str) -> Notification | None:
         """Создает новое уведомление"""
         session = self.db.get_session()
         try:
             # Проверяем существует ли уже уведомление для этого события
+            event = session.query(Event).filter(Event.event_id == event_id).first()
             existing = (
                 session.query(Notification)
                 .filter(
-                    Notification.event_id == event_id, Notification.user_id == user_id
+                    Notification.event_id == event_id, Notification.token_id == event.token_id
                 )
                 .first()
             )
@@ -682,7 +691,7 @@ class NotificationQueries(Queries):
                 logger.info(f"Уведомление для события {event_id} уже существует")
                 return existing
 
-            notification = Notification(event_id=event_id, user_id=user_id)
+            notification = Notification(event_id=event_id, token_id=event.token_id)
             session.add(notification)
             session.commit()
             logger.info(f"Уведомление создано: {notification}")
@@ -698,10 +707,11 @@ class NotificationQueries(Queries):
         """Получает уведомление по событию и пользователю"""
         session = self.db.get_session()
         try:
+            event = session.query(Event).filter(Event.event_id == event_id).first()
             notification = (
                 session.query(Notification)
                 .filter(
-                    Notification.event_id == event_id, Notification.user_id == user_id
+                    Notification.event_id == event_id, Notification.token_id == event.token_id
                 )
                 .first()
             )
@@ -721,16 +731,17 @@ class NotificationQueries(Queries):
         """Проверяет, отправлены ли все уведомления для события"""
         session = self.db.get_session()
         try:
+            token_ids = [token.token_id for token in session.query(UserTokenLink).filter(UserTokenLink.user_id == user_id).all()]
+            
             # Получаем количество уведомлений для указанных событий
             notifications_count = (
                 session.query(Notification)
                 .filter(
                     Notification.event_id.in_(event_ids),
-                    Notification.user_id == user_id,
+                    Notification.token_id.in_(token_ids),
                 )
                 .count()
             )
-
             # Проверяем что количество уведомлений равно количеству событий
             if notifications_count != len(event_ids):
                 logger.info(

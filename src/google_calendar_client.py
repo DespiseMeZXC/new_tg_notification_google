@@ -79,9 +79,9 @@ class GoogleCalendarClient:
                 "token_uri": flow.client_config["token_uri"],
             }
             self.db.users.add_user(user_id)
-            state_auth = self.db.tokens.save_auth_state(user_id, flow_state, flow.redirect_uri, "auth")
+            state_auth, message = self.db.tokens.save_auth_state(user_id, flow_state, flow.redirect_uri, "auth")
             if not state_auth:
-                return "❌ Вы исчерпали лимит на количество авторизаций(5)."
+                return message
             logger.info(f"URL авторизации создан для пользователя: {user_id}")
             return auth_url
         except Exception as e:
@@ -192,66 +192,176 @@ class GoogleCalendarClient:
         limit: int = 10,
         timezone_str: str = "UTC",
     ) -> List[Dict[str, Any]]:
-        """Получение предстоящих событий из Google Calendar."""
+        """Получение предстоящих событий из Google Calendar для всех токенов пользователя."""
         loop = asyncio.get_event_loop()
-
-        # Получаем учетные данные
-        creds = await self.get_credentials(user_id)
-
-        # Если нет учетных данных, возвращаем пустой список
-        if not creds:
-            logger.info(f"Учетные данные не найдены для пользователя: {user_id}")
+        all_events = []
+        logger.info(f"Получение предстоящих событий для пользователя: {user_id}")
+        # Получаем все токены пользователя
+        user_tokens = self.db.tokens.get_all_tokens(user_id)
+        logger.info(f"Найдено {len(user_tokens)} токенов для пользователя: {user_id}")
+        if not user_tokens:
+            logger.info(f"Токены не найдены для пользователя: {user_id}")
             return []
-
-        # Создаем сервис
-        service = await loop.run_in_executor(
-            None, lambda: build("calendar", "v3", credentials=creds)
-        )
-
-        # Убедимся, что у datetime есть timezone и преобразуем в UTC
-        if time_min.tzinfo is None:
-            time_min = time_min.replace(tzinfo=timezone.utc)
-        else:
-            time_min = time_min.astimezone(timezone.utc)
-
-        if time_max.tzinfo is None:
-            time_max = time_max.replace(tzinfo=timezone.utc)
-        else:
-            time_max = time_max.astimezone(timezone.utc)
-
-        # Удаляем микросекунды
-        time_min = time_min.replace(microsecond=0)
-        time_max = time_max.replace(microsecond=0)
-
-        # Форматируем время в формат RFC3339
-        time_min_str = time_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-        time_max_str = time_max.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        logger.info(f"Запрашиваем события с {time_min_str} по {time_max_str}")
-
-        try:
-            # Вызываем API
-            events_result = await loop.run_in_executor(
-                None,
-                lambda: service.events()
-                .list(
-                    calendarId="primary",
-                    timeMin=time_min_str,
-                    timeMax=time_max_str,
-                    maxResults=limit,
-                    singleEvents=True,
-                    orderBy="startTime",
-                    timeZone=timezone_str,
+        for token_obj in user_tokens:
+            try:
+                # Обработка объекта Token
+                token_email = None  # Для логов
+                
+                # Проверяем структуру данных токена
+                if hasattr(token_obj, 'token_data'):
+                    # Если token_data доступен как атрибут объекта
+                    token_data = getattr(token_obj, 'token_data')
+                    # Получаем email для логов
+                    if hasattr(token_obj, 'email'):
+                        token_email = getattr(token_obj, 'email')
+                    else:
+                        token_email = 'без email'
+                elif isinstance(token_obj, dict) and 'token_data' in token_obj:
+                    # Если token_obj это словарь с ключом token_data
+                    token_data = token_obj['token_data']
+                    token_email = token_obj.get('email', 'без email')
+                else:
+                    # Используем сам объект, если нет атрибута token_data
+                    logger.warning(f"Не найден атрибут 'token_data' в токене, используем сам объект")
+                    if hasattr(token_obj, '__dict__'):
+                        token_data = token_obj.__dict__.copy()
+                        if '_sa_instance_state' in token_data:
+                            del token_data['_sa_instance_state']
+                            
+                        if 'email' in token_data:
+                            token_email = token_data['email']
+                        else:
+                            token_email = 'без email'
+                    else:
+                        # Считаем token_obj сам по себе данными токена
+                        token_data = token_obj
+                        token_email = 'без email'
+                
+                
+                # Если token_data это строка (например, JSON), пробуем преобразовать в словарь
+                if isinstance(token_data, str):
+                    try:
+                        token_data = json.loads(token_data)
+                    except Exception as e:
+                        logger.error(f"Ошибка при преобразовании JSON строки в словарь: {e}")
+                        continue
+                
+                # Создаем учетные данные из токена
+                try:
+                    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+                except Exception as e:
+                    logger.error(f"Ошибка при создании Credentials: {e}")
+                    # Пробуем прочитать данные из файла учетных данных
+                    try:
+                        with open(self.credentials_file, 'r') as f:
+                            client_config = json.load(f)
+                        
+                        if 'installed' in client_config:
+                            client_id = client_config['installed']['client_id']
+                            client_secret = client_config['installed']['client_secret']
+                            token_uri = client_config['installed']['token_uri']
+                            
+                            # Проверяем, есть ли необходимые поля в token_data
+                            if 'refresh_token' not in token_data or 'token' not in token_data:
+                                logger.error("Отсутствуют обязательные поля refresh_token или token")
+                                continue
+                                
+                            # Создаем объект Credentials вручную
+                            creds = Credentials(
+                                token=token_data.get('token'),
+                                refresh_token=token_data.get('refresh_token'),
+                                token_uri=token_uri,
+                                client_id=client_id,
+                                client_secret=client_secret,
+                                scopes=SCOPES
+                            )
+                    except Exception as inner_e:
+                        logger.error(f"Не удалось создать учетные данные из файла: {inner_e}")
+                        continue
+                
+                # Проверяем валидность токена
+                if not creds or not creds.valid:
+                    if creds and creds.expired and creds.refresh_token:
+                        creds.refresh(Request())
+                        # Сохраняем обновленные учетные данные
+                        self.db.tokens.save_token(user_id, json.loads(creds.to_json()))
+                        logger.info(f"Обновленные учетные данные сохранены для пользователя: {user_id}")
+                    else:
+                        logger.info(f"Невалидный токен для пользователя: {user_id}")
+                        continue
+                
+                # Создаем сервис
+                service = await loop.run_in_executor(
+                    None, lambda: build("calendar", "v3", credentials=creds)
                 )
-                .execute(),
-            )
-
-            events = events_result.get("items", [])
-            # Фильтруем только события с видеовстречами
-            events = [event for event in events if "hangoutLink" in event]
-
-            logger.info(f"Получено {len(events)} событий из календаря")
-            return events
-        except Exception as e:
-            logger.error(f"Ошибка при получении событий: {e}")
-            return []
+                
+                # Убедимся, что у datetime есть timezone и преобразуем в UTC
+                if time_min.tzinfo is None:
+                    time_min = time_min.replace(tzinfo=timezone.utc)
+                else:
+                    time_min = time_min.astimezone(timezone.utc)
+                
+                if time_max.tzinfo is None:
+                    time_max = time_max.replace(tzinfo=timezone.utc)
+                else:
+                    time_max = time_max.astimezone(timezone.utc)
+                
+                # Удаляем микросекунды
+                time_min = time_min.replace(microsecond=0)
+                time_max = time_max.replace(microsecond=0)
+                
+                # Форматируем время в формат RFC3339
+                time_min_str = time_min.strftime("%Y-%m-%dT%H:%M:%SZ")
+                time_max_str = time_max.strftime("%Y-%m-%dT%H:%M:%SZ")
+                
+                logger.info(f"Запрашиваем события с {time_min_str} по {time_max_str} для токена {token_email}")
+                
+                # Вызываем API
+                events_result = await loop.run_in_executor(
+                    None,
+                    lambda: service.events()
+                    .list(
+                        calendarId="primary",
+                        timeMin=time_min_str,
+                        timeMax=time_max_str,
+                        maxResults=limit,
+                        singleEvents=True,
+                        orderBy="startTime",
+                        timeZone=timezone_str,
+                    )
+                    .execute(),
+                )
+                
+                events = events_result.get("items", [])
+                # Фильтруем только события с видеовстречами
+                events = [event for event in events if "hangoutLink" in event]
+                
+                # Добавляем информацию о токене к каждому событию
+                token_id = None
+                if hasattr(token_obj, 'id'):
+                    token_id = token_obj.id
+                elif isinstance(token_obj, dict) and 'id' in token_obj:
+                    token_id = token_obj['id']
+                    
+                for event in events:
+                    event["token_id"] = token_id
+                    event["token_email"] = token_email
+                
+                all_events.extend(events)
+                logger.info(f"Получено {len(events)} событий из календаря для токена {token_email}")
+            
+            except Exception as e:
+                # Пытаемся получить email для логирования
+                token_email = None
+                if hasattr(token_obj, 'email'):
+                    token_email = token_obj.email
+                elif isinstance(token_obj, dict) and 'email' in token_obj:
+                    token_email = token_obj['email']
+                else:
+                    token_email = 'без email'
+                
+                logger.error(f"Ошибка при получении событий для токена {token_email}: {e}")
+                continue
+        
+        logger.info(f"Всего получено {len(all_events)} событий из всех календарей пользователя {user_id}")
+        return all_events

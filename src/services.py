@@ -74,26 +74,47 @@ class EventService:
     def group_events_by_day(
         self, events: List[Dict[str, Any]]
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Группирует события по дням"""
-        meetings_by_day: Dict[str, List[Dict[str, Any]]] = {}
-
+        """Группирует события сначала по почте, а затем по дням"""
+        # Сначала группируем по почте
+        meetings_by_email: Dict[str, List[Dict[str, Any]]] = {}
+        
         for event in events:
-            start_time = event["start"].get("dateTime", event["start"].get("date"))
-            start_dt = safe_parse_datetime(start_time)
-            day_key = start_dt.strftime("%d.%m.%Y")
-
-            if day_key not in meetings_by_day:
-                meetings_by_day[day_key] = []
-
-            meetings_by_day[day_key].append(event)
-
+            # Получаем email организатора или первого участника
+            email = None
+            if "organizer" in event and "email" in event["organizer"]:
+                email = event["organizer"]["email"]
+            elif "attendees" in event and event["attendees"] and "email" in event["attendees"][0]:
+                email = event["attendees"][0]["email"]
+            else:
+                # Если email не найден, используем "unknown"
+                email = "unknown"
+                
+            if email not in meetings_by_email:
+                meetings_by_email[email] = []
+                
+            meetings_by_email[email].append(event)
+        
+        # Теперь группируем по дням для каждой почты
+        meetings_by_day: Dict[str, List[Dict[str, Any]]] = {}
+        
+        for email, email_events in meetings_by_email.items():
+            for event in email_events:
+                start_time = event["start"].get("dateTime", event["start"].get("date"))
+                start_dt = safe_parse_datetime(start_time)
+                day_key = start_dt.strftime("%d.%m.%Y")
+                
+                if day_key not in meetings_by_day:
+                    meetings_by_day[day_key] = []
+                
+                meetings_by_day[day_key].append(event)
+        
         return meetings_by_day
 
     def save_events(self, user_id: int, events: List[Dict[str, Any]]) -> None:
         """Сохраняет события в базу данных"""
         for event in events:
             self.db.events.save_event(user_id, event)
-            self.db.notifications.create_notification(event["id"], user_id)
+            self.db.notifications.create_notification(event["id"])
 
     def check_deleted_events(
         self,
@@ -127,7 +148,7 @@ class NotificationService:
 
     def create_notification(self, event_id: str, user_id: int) -> None:
         """Создает уведомление для события"""
-        self.db.notifications.create_notification(event_id, user_id)
+        self.db.notifications.create_notification(event_id)
 
 
 class TokenService:
@@ -243,14 +264,15 @@ class MessageFormatter:
         """Форматирует список событий на день"""
         prefix = "Обнаружены новые онлайн-встречи:\n" if is_new else ""
         message = f"{prefix}📆 {hbold(f'Онлайн-встречи на {day}:')}\n"
-
-        for event in events:
+        sorted_events = sorted(events, key=lambda x: x["token_email"])
+        for event in sorted_events:
             start_time = event["start"].get("dateTime", event["start"].get("date"))
             start_dt = safe_parse_datetime(start_time, event["start"]["timeZone"])
             end_time = event["end"].get("dateTime", event["end"].get("date"))
             end_dt = safe_parse_datetime(end_time, event["end"]["timeZone"])
 
             message += (
+                f"📧 {hbold('Почта:')} {event['token_email']}\n"
                 f"📝 {hbold('Название:')} {event['summary']}\n"
                 f"🕒 {hbold('Время:')} {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}\n"
                 f"🔗 {hbold('Ссылка:')} {event['hangoutLink']}\n\n"
@@ -280,6 +302,7 @@ class MessageFormatter:
             message += f"\n📅 Онлайн встречи на {date}:\n"
             for event in events_by_date[date]:
                 message += (
+                    f"📧 Почта: {event['token_email']}\n"
                     f"🗑️ Название: {event['summary']}\n"
                     f"🕒 Время: {event['start'].strftime('%H:%M')} - {event['end'].strftime('%H:%M')}\n"
                 )
@@ -306,6 +329,7 @@ class MessageFormatter:
         for date in sorted(events_by_date.keys()):
             message += f"\n🔄 Встречи обновлена на дату: {date}\n"
             for event in events_by_date[date]:
+                message += f"📧 Почта: {event['token_email']}\n"
                 message += "Было:\n"
                 message += f"📝 Название: {event['old_summary']}\n"
 
@@ -419,7 +443,6 @@ class BotService:
                 time_max=time_max,
                 limit=50,
             )
-
             if not active_events:
                 return WeekMeetingsResult(
                     success=True,
@@ -437,8 +460,6 @@ class BotService:
 
             # Группируем встречи по дням
             meetings_by_day = self.event_service.group_events_by_day(active_events)
-            logger.info(f"deleted_events: {len(deleted_events)}")
-            logger.info(f"updated_events: {len(updated_events)}")
             return WeekMeetingsResult(
                 success=True,
                 message="",
@@ -490,8 +511,6 @@ class BotService:
         updated_events = self.event_service.check_updated_events(
             user_id, result.active_events
         )
-        logger.info(f"Deleted events: {len(deleted_events)}")
-        logger.info(f"Updated events: {len(updated_events)}")
         return WeekMeetingsResult(
             success=result.success,
             message=result.message,
